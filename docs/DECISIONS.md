@@ -1,0 +1,93 @@
+# Decisions
+
+One entry per architectural decision, with the reasoning that led to it. If a decision gets reversed, edit the entry and say why rather than deleting it.
+
+## Web app rather than a native iOS app
+
+**Decision.** Build a Next.js PWA installed to the iPhone home screen, not a native iOS app.
+
+**Reasoning.** The app is one screen and a button. Native buys a home screen icon, offline support, and push notifications; a PWA gives the first two outright and the third with more effort. Against that, native costs an Apple developer account, Xcode, a signing setup, App Store review for a single-user app that will never be listed, and a rebuild-and-reinstall cycle for every change. A PWA deploys by pushing to a branch.
+
+The one thing native would genuinely buy is HealthKit, and the whole point of this app is that her data does not go anywhere she did not put it.
+
+**Consequences.** Push notifications are deferred, not free. iOS standalone mode has quirks (safe areas, no pull-to-refresh, storage eviction under pressure) that task 3 has to handle. Storage eviction in particular is why the encrypted backup exists.
+
+## Local-first rather than a server database
+
+**Decision.** Her data lives on her phone. The server holds nothing but ciphertext, and only for backup.
+
+**Reasoning.** This is menstrual health data for one person. There is no product reason for it to leave the device: there is no sharing, no sync between users, no analytics, no aggregation. A server database would add a class of risk (breach, subpoena, my own operational mistakes) in exchange for nothing she asked for.
+
+Local-first also makes the app fast and offline by default, which matters for something opened for four seconds at a time.
+
+**Consequences.** Backup is her problem unless we solve it, so task 3 solves it with browser-side encryption. Losing the phone without a backup loses the history. There is no cross-device story, and that is fine because there is one device.
+
+## The engine is decoupled from React
+
+**Decision.** `src/engine/` is pure TypeScript with zero imports from React, Next, or any browser API. Enforced by `no-restricted-imports` and `no-restricted-globals` in `eslint.config.mjs`, and by `src/engine/__tests__/purity.test.ts`, which scans the source and would catch a disabled lint rule.
+
+**Reasoning.** The engine is the part of this app with real complexity and real consequences: Bayesian updating, credible intervals, skip detection, self-calibration. That code needs to be exercised hard, and it needs to be exercised without a render tree, a test renderer, a DOM shim, or a component in the way. `vitest run` in a plain node environment runs the whole suite in under a second, which means the tests actually get run.
+
+It also keeps the option open. The engine could move to a worker, to a server function, or to a different framework entirely without touching a line of its logic.
+
+**Consequences.** The engine cannot read storage or the clock without being handed them. `analyze()` takes an optional `today`, which is exactly what makes the tests deterministic. The UI layer owns everything platform-shaped.
+
+## Calendar dates rather than timestamps
+
+**Decision.** Every date in the system is a local calendar date stored as a `YYYY-MM-DD` string. No `Date` objects in the data model, no epoch timestamps, no UTC.
+
+**Reasoning.** "My period started on the 3rd" is a fact about a square on a wall calendar. It has no time of day and no time zone. The moment it becomes an instant, three bugs become possible: logging at 11pm shows tomorrow's date, a cycle spanning a daylight saving transition measures 27 or 29 days instead of 28, and travelling across a time zone silently rewrites history.
+
+All three are the kind of bug that makes a user stop trusting an app, and none of them are worth the risk for zero benefit. There is no operation this app performs that needs sub-day resolution.
+
+`src/engine/date.ts` does all arithmetic through an integer day number (Howard Hinnant's civil-from-days), never through `Date` addition, so every operation is exact by construction rather than correct by luck. The DST cases are covered directly in `src/engine/__tests__/date.test.ts`.
+
+**Consequences.** One permitted `new Date()` in the engine, as the default argument of `todayLocal()`, which immediately reads local calendar fields and returns a string. `toISOString()` is banned outright and the purity test checks for it.
+
+## Normal-Inverse-Gamma rather than a mean and a standard deviation
+
+**Decision.** Model cycle length with a Normal-Inverse-Gamma conjugate prior, producing a Student-t posterior predictive.
+
+**Reasoning.** The app's core honesty claim is that it says how sure it is. A sample mean and sample standard deviation over two cycles would happily report a two day interval, which is a lie. The Student-t predictive is naturally wide when data is thin and tightens as cycles accumulate, so confidence falls out of the arithmetic instead of being a heuristic somebody tuned and then had to defend.
+
+Conjugacy also means the update is closed form: no sampler, no convergence to check, no dependency.
+
+**Consequences.** The prior's influence is real and lasting, especially combined with recency weighting. See the known limitations in [[RESEARCH]].
+
+## Recency weighting with a six cycle half life
+
+**Decision.** Weight observation `i` by `0.5 ^ ((n - i) / 6)`.
+
+**Reasoning.** Cycle length genuinely drifts with age, weight, stress, and postpartum recovery. An unweighted mean over all history would lag real change by years. Six cycles is roughly half a year, which tracks drift without letting one odd cycle dominate. The drifting fixture in [[TESTING]] shows the weighted fit beating an unweighted one on out-of-sample error.
+
+**Consequences.** The effective sample size saturates at about 9.2 cycles, so the prior never fully washes out. Documented under known limitations in [[RESEARCH]].
+
+## Cycles are derived, never stored
+
+**Decision.** The persisted document is a flat list of dated entries. Cycles are recomputed on every read.
+
+**Reasoning.** A cycle is the interval between two logged starts. Storing it would create a second source of truth that can drift out of sync with the only thing she actually typed. When she corrects a mistyped start date, every cycle around it has to change, and derivation gets that for free.
+
+**Consequences.** Every read runs the full derivation and the calibration replay. Both are O(n) or O(n squared) in the number of cycles, where n is at most a few hundred over a lifetime, so this costs nothing.
+
+## Skip detection lives in the model, not the UI
+
+**Decision.** `deriveCycles` flags suspected missed logs, excludes them from the fit, and exposes the flag for the UI to ask about.
+
+**Reasoning.** A missed log is not a UI presentation issue, it is a data quality issue that corrupts the variance estimate, and the variance estimate is what every interval in the app is made of. One 56 day gap in an otherwise regular history roughly triples the predictive spread. Handling it after the fit has already been poisoned is too late.
+
+**Consequences.** Two tuned constants (`SKIP_MEDIAN_MULTIPLE`, `SKIP_PREDICTIVE_SD_THRESHOLD`) and a minimum history before detection turns on, all documented in `src/engine/constants.ts`. False positives are possible for genuinely very irregular cycles, which is why the flag is a question rather than a silent deletion.
+
+## Calibration is replayed, not stored
+
+**Decision.** Reconstruct the full prediction history from the log on every analysis, grading each prediction against what actually happened, using only the data available before that outcome.
+
+**Reasoning.** Storing calibration records alongside the log would create the same drift problem as storing cycles: correct a date and the stored grades become wrong. Replaying also guarantees the reported error and coverage are genuinely out of sample, because each step can only see its own past.
+
+**Consequences.** The reported mean absolute error and coverage are real out-of-sample numbers and can be shown to her without qualification. The replay is O(n squared) in cycles, which at a few hundred cycles is free.
+
+## Related
+
+- [[PLAN]] for what gets built when.
+- [[RESEARCH]] for the science and the known limitations.
+- [[TESTING]] for how the claims are checked.

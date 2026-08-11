@@ -2,8 +2,57 @@
 
 A menstrual cycle tracker built for one person.
 
-Log the day your period starts. That's it. The app learns your cycle from there and predicts your phases, and it gets more accurate the longer you use it.
+Log the day your period starts. That is the entire input. From those dates alone the app learns your cycle, tells you what phase you are in, and predicts when your next period is likely, with an honest range rather than a single confident date. It gets more accurate the longer you use it.
 
-Private by design. Your data lives on your phone. Backups are encrypted in the browser before they leave it, so the server only ever holds ciphertext.
+**This is not contraception, and it is not medical advice.** Ovulation and the fertile window are inferred from cycle length alone. They are estimates, not observations. Do not use this app to avoid or achieve pregnancy, and talk to a doctor about anything that concerns you.
 
-Not contraception, and not medical advice.
+## What it does
+
+- **Learns your cycle length.** A Bayesian model over your observed cycles, weighted towards recent ones so it tracks real change instead of averaging over years of stale history.
+- **Predicts with a range.** Every prediction comes with a 50% and an 80% range, never a bare date. When there is little data the range is wide, and it tightens as cycles accumulate. That is a property of the maths, not a design choice applied afterwards.
+- **Notices missed logs.** A gap that looks like two cycles recorded as one gets flagged and left out of the model rather than quietly wrecking the estimate.
+- **Grades itself.** It tracks how accurate its own past predictions were and widens its ranges when it has been over-confident. You can see the numbers.
+- **Says when it does not know.** With no history it says so plainly instead of dressing up a population average as a personal prediction.
+
+## What it does not do
+
+No symptom logging. No mood logging. No temperature. No accounts, no sharing, no analytics, no notifications shaming you into opening it. It is one button and one screen.
+
+## Privacy
+
+Your data lives on your device. There is no server-side database of anything you log. Backups are encrypted in the browser before they leave it, so the backup host only ever holds ciphertext.
+
+This repository is public and contains no health data of any kind. Every number in the test suite comes from a seeded synthetic generator.
+
+## Status
+
+Task 1 of 3 is complete: the repository scaffold and the full prediction engine with its tests. There is no product UI yet. See [docs/PLAN.md](docs/PLAN.md).
+
+## Stack
+
+Next.js (App Router), TypeScript in strict mode, Tailwind, Vitest. Deployed on Vercel as an installable PWA.
+
+The prediction engine at `src/engine/` is pure TypeScript with no React, Next, or browser dependencies, so it can be tested in a plain node process and moved somewhere else later.
+
+## Running it
+
+```
+npm install
+npm run dev      # http://localhost:3000
+npm run build
+npm test
+npm run lint
+```
+
+## Documentation
+
+`docs/` is an Obsidian vault, version controlled with the code.
+
+- [PLAN.md](docs/PLAN.md) - the phased build plan
+- [RESEARCH.md](docs/RESEARCH.md) - the cycle science the model is built on, with sources
+- [DECISIONS.md](docs/DECISIONS.md) - architectural decisions and the reasoning behind them
+- [TESTING.md](docs/TESTING.md) - how to run the tests, what the fixtures are, what is actually proven
+
+## Licence
+
+Not currently licensed for reuse.

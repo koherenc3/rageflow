@@ -1,0 +1,212 @@
+import { describe, expect, it } from 'vitest';
+import {
+  FERTILE_DAYS_AFTER_OVULATION,
+  FERTILE_DAYS_BEFORE_OVULATION,
+  LUTEAL_PRIOR_MEAN_DAYS,
+  LUTEAL_PRIOR_SD_DAYS,
+  PERIOD_PRIOR_MEAN_DAYS,
+  PERIOD_PRIOR_SD_DAYS,
+  PREMENSTRUAL_WINDOW_DAYS,
+} from '../constants';
+import { addDays, diffDays } from '../date';
+import { deriveCycles } from '../cycles';
+import {
+  buildPhaseModel,
+  learnLength,
+  learnLutealLength,
+  learnPeriodLength,
+  phaseForDate,
+  type PhaseInputs,
+} from '../phases';
+import { analyze, logFromStartDates } from '../index';
+
+function inputsFor(starts: readonly string[], predictedNextStart: string): PhaseInputs {
+  const { cycles } = deriveCycles(logFromStartDates(starts));
+  return {
+    cycles,
+    predictedNextStart,
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+}
+
+describe('learnLength', () => {
+  it('returns the prior untouched with no observations', () => {
+    const learned = learnLength(13, 2, [], 1.5);
+    expect(learned).toEqual({ meanDays: 13, sdDays: 2, observationCount: 0, isPrior: true });
+  });
+
+  it('moves towards the observations and tightens', () => {
+    const learned = learnLength(5, 1.5, [7, 7, 7], 1);
+    expect(learned.meanDays).toBeGreaterThan(5);
+    expect(learned.meanDays).toBeLessThan(7);
+    expect(learned.sdDays).toBeLessThan(1.5);
+    expect(learned.isPrior).toBe(false);
+    expect(learned.observationCount).toBe(3);
+  });
+
+  it('converges on the observed value given enough of them', () => {
+    const learned = learnLength(5, 1.5, new Array(200).fill(6), 1);
+    expect(learned.meanDays).toBeCloseTo(6, 1);
+  });
+});
+
+describe('luteal length', () => {
+  it('is not hardcoded at 14 days', () => {
+    expect(LUTEAL_PRIOR_MEAN_DAYS).not.toBe(14);
+  });
+
+  it('sits at its prior when nothing can update it, which is the whole v1 case', () => {
+    const learned = learnLutealLength();
+    expect(learned.meanDays).toBe(LUTEAL_PRIOR_MEAN_DAYS);
+    expect(learned.sdDays).toBe(LUTEAL_PRIOR_SD_DAYS);
+    expect(learned.isPrior).toBe(true);
+  });
+
+  it('has an update hook ready for a future LH or temperature input', () => {
+    const learned = learnLutealLength([11, 11, 11, 11]);
+    expect(learned.isPrior).toBe(false);
+    expect(learned.meanDays).toBeLessThan(LUTEAL_PRIOR_MEAN_DAYS);
+    expect(learned.meanDays).toBeGreaterThan(11);
+    expect(learned.sdDays).toBeLessThan(LUTEAL_PRIOR_SD_DAYS);
+  });
+});
+
+describe('period length', () => {
+  it('falls back to the prior when she only logs starts', () => {
+    const learned = learnPeriodLength();
+    expect(learned.meanDays).toBe(PERIOD_PRIOR_MEAN_DAYS);
+    expect(learned.sdDays).toBe(PERIOD_PRIOR_SD_DAYS);
+    expect(learned.isPrior).toBe(true);
+  });
+
+  it('learns from logged end dates', () => {
+    const learned = learnPeriodLength([7, 7, 6]);
+    expect(learned.meanDays).toBeGreaterThan(PERIOD_PRIOR_MEAN_DAYS);
+    expect(learned.isPrior).toBe(false);
+  });
+});
+
+describe('buildPhaseModel', () => {
+  const starts = ['2024-01-01', '2024-01-29', '2024-02-26'];
+  const predicted = '2024-03-25';
+  const model = buildPhaseModel(inputsFor(starts, predicted));
+
+  it('places ovulation a luteal length before the predicted start', () => {
+    expect(model.estimatedOvulationDate).toBe(addDays(predicted, -LUTEAL_PRIOR_MEAN_DAYS));
+  });
+
+  it('spans the fertile window from five days before to one day after ovulation', () => {
+    const ovulation = model.estimatedOvulationDate as string;
+    expect(model.fertileWindow?.start).toBe(addDays(ovulation, -FERTILE_DAYS_BEFORE_OVULATION));
+    expect(model.fertileWindow?.end).toBe(addDays(ovulation, FERTILE_DAYS_AFTER_OVULATION));
+    expect(
+      diffDays(model.fertileWindow?.start as string, model.fertileWindow?.end as string) + 1
+    ).toBe(FERTILE_DAYS_BEFORE_OVULATION + FERTILE_DAYS_AFTER_OVULATION + 1);
+  });
+
+  it('indexes the premenstrual window backward from the predicted start', () => {
+    expect(model.premenstrualWindow?.start).toBe(addDays(predicted, -PREMENSTRUAL_WINDOW_DAYS));
+    expect(model.premenstrualWindow?.end).toBe(addDays(predicted, -1));
+  });
+
+  it('carries the not-contraception flag', () => {
+    expect(model.fertilityIsEstimateNotContraception).toBe(true);
+  });
+
+  it('has no windows at all with an empty log', () => {
+    const empty = buildPhaseModel(inputsFor([], '2024-03-25'));
+    expect(empty.estimatedOvulationDate).toBeUndefined();
+    expect(empty.fertileWindow).toBeUndefined();
+    expect(empty.fertilityIsEstimateNotContraception).toBe(true);
+  });
+});
+
+describe('phaseForDate', () => {
+  // Current cycle starts 2024-02-26, predicted next start 2024-03-25 (28 days).
+  // Period 5 days, luteal 13 days, so ovulation is 2024-03-12.
+  const inputs = inputsFor(['2024-01-01', '2024-01-29', '2024-02-26'], '2024-03-25');
+
+  const expectations: Array<[string, string]> = [
+    ['2024-02-26', 'menstrual'],
+    ['2024-03-01', 'menstrual'],
+    ['2024-03-02', 'follicular'],
+    ['2024-03-06', 'follicular'],
+    ['2024-03-07', 'fertile'],
+    ['2024-03-12', 'fertile'],
+    ['2024-03-13', 'fertile'],
+    ['2024-03-14', 'luteal'],
+    ['2024-03-19', 'luteal'],
+    ['2024-03-20', 'premenstrual'],
+    ['2024-03-24', 'premenstrual'],
+  ];
+
+  for (const [date, phase] of expectations) {
+    it(`calls ${date} ${phase}`, () => {
+      expect(phaseForDate(inputs, date)?.phase).toBe(phase);
+    });
+  }
+
+  it('numbers the day of the cycle from one', () => {
+    expect(phaseForDate(inputs, '2024-02-26')?.dayOfCycle).toBe(1);
+    expect(phaseForDate(inputs, '2024-03-24')?.dayOfCycle).toBe(28);
+  });
+
+  it('reports the period as here once the predicted start arrives', () => {
+    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-28')?.phase).toBe('menstrual');
+  });
+
+  it('anchors a historical cycle to what actually happened, not to a prediction', () => {
+    // The cycle starting 2024-01-01 really ended on 2024-01-29, so its
+    // ovulation sits 13 days before that regardless of the current prediction.
+    const estimate = phaseForDate(inputs, '2024-01-16');
+    expect(estimate?.phase).toBe('fertile');
+    expect(phaseForDate(inputs, '2024-01-19')?.phase).toBe('luteal');
+  });
+
+  it('says nothing before the first logged start', () => {
+    expect(phaseForDate(inputs, '2023-12-25')).toBeUndefined();
+  });
+
+  it('always carries the not-contraception flag and a confidence', () => {
+    for (const [date] of expectations) {
+      const estimate = phaseForDate(inputs, date);
+      expect(estimate?.fertilityIsEstimateNotContraception).toBe(true);
+      expect(estimate?.confidence).toBe(0.5);
+      expect(estimate?.confidenceTier).toBe('moderate');
+    }
+  });
+
+  it('spells out that fertility output is an estimate, on the fertile days', () => {
+    const estimate = phaseForDate(inputs, '2024-03-12');
+    expect(estimate?.summary).toMatch(/not contraception/i);
+    expect(estimate?.summary).toMatch(/inferred/i);
+  });
+});
+
+describe('phases through the public analysis', () => {
+  it('reports today, the ovulation estimate, and the fertile window together', () => {
+    const analysis = analyze(
+      logFromStartDates(['2024-01-01', '2024-01-29', '2024-02-26', '2024-03-25']),
+      { today: '2024-04-05' }
+    );
+    expect(analysis.currentPhase?.date).toBe('2024-04-05');
+    expect(analysis.phases.estimatedOvulationDate).toBeDefined();
+    expect(analysis.phases.fertileWindow).toBeDefined();
+    expect(analysis.phases.lutealLength.isPrior).toBe(true);
+    expect(analysis.phases.periodLength.isPrior).toBe(true);
+  });
+
+  it('keeps ovulation exactly one luteal length before the predicted start', () => {
+    const analysis = analyze(
+      logFromStartDates(['2024-01-01', '2024-01-29', '2024-02-26', '2024-03-25']),
+      { today: '2024-04-05' }
+    );
+    expect(
+      diffDays(analysis.phases.estimatedOvulationDate as string, analysis.prediction.pointDate)
+    ).toBe(LUTEAL_PRIOR_MEAN_DAYS);
+  });
+});
