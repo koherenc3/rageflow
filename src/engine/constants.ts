@@ -144,6 +144,28 @@ export const FERTILE_DAYS_AFTER_OVULATION = 1;
 /** The premenstrual phase is the last five days before the predicted start. */
 export const PREMENSTRUAL_WINDOW_DAYS = 5;
 
+/**
+ * When a log stops counting as current. Both conditions have to hold.
+ *
+ * The quantile is the far tail of the predictive distribution over the next
+ * start: 99% of the mass sits before it, so a day past it is a day the model
+ * said would almost certainly not arrive. That keeps the bound tied to how sure
+ * the engine is, which is the point of having a model at all, and it is why the
+ * bound is a quantile rather than a fixed multiple of her cycle length.
+ *
+ * A quantile alone is not enough. The engine measures its own 80% coverage at
+ * 75-90%, so any bound cut from interval width fires on ordinary cycles that
+ * simply run late, and it fires in the week she is most likely to open the app.
+ * The floor is the second gate: two expected cycles of silence is not a late
+ * period, it is a log that stopped. Requiring both means the quantile can only
+ * ever push the verdict later than the floor, never earlier, so a very variable
+ * history holds on longer and a regular one still gets a month of grace.
+ *
+ * The gap between the predicted start and this bound is the `late` state.
+ */
+export const STALE_PREDICTIVE_QUANTILE = 0.99;
+export const STALE_MIN_MISSED_CYCLES = 2;
+
 /* ------------------------------------------------------------------ *
  * Layer 3: calibration
  * ------------------------------------------------------------------ */

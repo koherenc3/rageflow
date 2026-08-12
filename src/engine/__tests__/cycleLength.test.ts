@@ -10,6 +10,7 @@ import {
   fitCycleLength,
   posteriorMedian,
   predictiveInterval,
+  predictiveQuantile,
   priorPosterior,
   recencyWeights,
 } from '../cycleLength';
@@ -175,6 +176,44 @@ describe('predictiveInterval', () => {
     expect(() => predictiveInterval(posterior.predictive, 0)).toThrow(RangeError);
     expect(() => predictiveInterval(posterior.predictive, 1)).toThrow(RangeError);
     expect(() => predictiveInterval(posterior.predictive, 0.8, 0.5)).toThrow(RangeError);
+  });
+});
+
+describe('predictiveQuantile', () => {
+  const posterior = fitCycleLength([28, 29, 28, 30, 28, 29]);
+
+  it('puts the median at the location and the tails either side of it', () => {
+    expect(predictiveQuantile(posterior.predictive, 0.5)).toBeCloseTo(
+      posterior.predictive.location,
+      10
+    );
+    expect(predictiveQuantile(posterior.predictive, 0.99)).toBeGreaterThan(
+      predictiveQuantile(posterior.predictive, 0.8)
+    );
+    expect(predictiveQuantile(posterior.predictive, 0.01)).toBeLessThan(
+      posterior.predictive.location
+    );
+  });
+
+  it('agrees with the two-sided interval it is built from', () => {
+    const { low, high } = predictiveInterval(posterior.predictive, 0.8);
+    expect(predictiveQuantile(posterior.predictive, 0.1)).toBeCloseTo(low, 10);
+    expect(predictiveQuantile(posterior.predictive, 0.9)).toBeCloseTo(high, 10);
+  });
+
+  it('moves the tail out with the widen factor', () => {
+    const plain = predictiveQuantile(posterior.predictive, 0.99, 1);
+    const widened = predictiveQuantile(posterior.predictive, 0.99, 1.5);
+    expect(widened - posterior.predictive.location).toBeCloseTo(
+      1.5 * (plain - posterior.predictive.location),
+      10
+    );
+  });
+
+  it('rejects impossible arguments', () => {
+    expect(() => predictiveQuantile(posterior.predictive, 0)).toThrow(RangeError);
+    expect(() => predictiveQuantile(posterior.predictive, 1)).toThrow(RangeError);
+    expect(() => predictiveQuantile(posterior.predictive, 0.99, 0.5)).toThrow(RangeError);
   });
 });
 

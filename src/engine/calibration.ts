@@ -22,33 +22,40 @@ import {
 } from './constants';
 import { diffDays, isWithin, type ISODate } from './date';
 import { fitCycleLength } from './cycleLength';
-import { predictNextStart } from './prediction';
+import { nextStartEstimate } from './prediction';
 import { clamp } from './stats';
 import type {
   CalibrationRecord,
   CalibrationSummary,
   DerivedCycle,
-  NextStartPrediction,
+  NextStartEstimate,
 } from './types';
 
-/** Grade one prediction against the start that actually happened. */
+/**
+ * Grade one prediction against the start that actually happened.
+ *
+ * This takes the raw estimate rather than the presented prediction. Every graded
+ * prediction is historical and was current at the time it was made, so nothing
+ * here is ever stale, and grading the numbers the model produced keeps the
+ * measurement independent of what a consumer is allowed to see.
+ */
 export function gradePrediction(
   cycleIndex: number,
-  prediction: NextStartPrediction,
+  estimate: NextStartEstimate,
   actualDate: ISODate
 ): CalibrationRecord {
-  const interval50 = prediction.interval50.range;
-  const interval80 = prediction.interval80.range;
+  const interval50 = estimate.interval50.range;
+  const interval80 = estimate.interval80.range;
   return {
     cycleIndex,
-    predictedDate: prediction.pointDate,
+    predictedDate: estimate.pointDate,
     actualDate,
-    errorDays: diffDays(prediction.pointDate, actualDate),
+    errorDays: diffDays(estimate.pointDate, actualDate),
     interval50,
     interval80,
     within50: isWithin(actualDate, interval50.start, interval50.end),
     within80: isWithin(actualDate, interval80.start, interval80.end),
-    interval80WidthDays: prediction.interval80.widthDays,
+    interval80WidthDays: estimate.interval80.widthDays,
   };
 }
 
@@ -148,7 +155,7 @@ export function buildCalibration(cycles: readonly DerivedCycle[]): CalibrationSu
 
     const posterior = fitCycleLength(acceptedLengths);
     const coverage80SoFar = records.length === 0 ? Number.NaN : within80Count / records.length;
-    const prediction = predictNextStart({
+    const estimate = nextStartEstimate({
       lastStartDate: cycle.startDate,
       today: cycle.startDate,
       posterior,
@@ -157,7 +164,7 @@ export function buildCalibration(cycles: readonly DerivedCycle[]): CalibrationSu
       widenFactor: widenFactorFor(records.length, coverage80SoFar),
     });
 
-    const record = gradePrediction(cycle.index, prediction, cycle.nextStartDate);
+    const record = gradePrediction(cycle.index, estimate, cycle.nextStartDate);
     records.push(record);
     if (record.within80) within80Count += 1;
     acceptedLengths.push(cycle.lengthDays);

@@ -22,7 +22,7 @@ import {
 } from './cycles';
 import { fitCycleLength } from './cycleLength';
 import { buildCalibration } from './calibration';
-import { predictNextStart } from './prediction';
+import { describePrediction, nextStartEstimate, type PredictNextStartInput } from './prediction';
 import { buildPhaseModel, learnLutealLength, learnPeriodLength, phaseForDate } from './phases';
 import { coldStartMessage, confidenceFor, confidenceTierFor, isPersonalized } from './confidence';
 import type { CycleAnalysis, CycleLog, DayEntry } from './types';
@@ -49,14 +49,19 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
   const calibration = buildCalibration(cycles);
 
   const lastStart = lastStartDate(cycles);
-  const prediction = predictNextStart({
+  const predictionInput: PredictNextStartInput = {
     ...(lastStart === undefined ? {} : { lastStartDate: lastStart }),
     today,
     posterior,
     usedCycleCount: lengths.length,
     loggedStartCount: cycles.length,
     widenFactor: calibration.widenFactor,
-  });
+  };
+  // The phase model is anchored to the raw estimate rather than to the
+  // prediction, because a stale prediction has no dates left on it and the
+  // in-progress cycle still has to be placed against the start it was fitted to.
+  const estimate = nextStartEstimate(predictionInput);
+  const prediction = describePrediction(estimate, predictionInput);
 
   const confidence = confidenceFor(
     posterior.weightSum,
@@ -67,8 +72,8 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
 
   const phaseInputs: PhaseInputs = {
     cycles,
-    predictedNextStart: prediction.pointDate,
-    predictionValidThrough: prediction.interval80.range.end,
+    predictedNextStart: estimate.pointDate,
+    predictionValidThrough: estimate.validThrough,
     today,
     lutealLength: learnLutealLength(options.lutealObservations ?? []),
     periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
@@ -132,10 +137,11 @@ export {
   maxWeightSum,
   minPredictiveSd,
   predictiveInterval,
+  predictiveQuantile,
   priorPosterior,
   recencyWeights,
 } from './cycleLength';
-export { predictNextStart } from './prediction';
+export { describePrediction, nextStartEstimate, predictNextStart } from './prediction';
 export {
   buildPhaseModel,
   learnLength,

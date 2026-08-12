@@ -16,6 +16,7 @@ import {
   mergeCycleAt,
   startDatesFromLengths,
 } from '../testing/synthetic';
+import { current } from './support';
 import type { CycleAnalysis } from '../types';
 
 const FIRST_START = '2023-02-01';
@@ -42,10 +43,10 @@ describe('fixture: regular cycles, mean 28, sd 1', () => {
   });
 
   it('keeps the intervals tight', () => {
-    expect(analysis.prediction.interval50.widthDays).toBeLessThanOrEqual(6);
-    expect(analysis.prediction.interval80.widthDays).toBeLessThanOrEqual(10);
-    expect(analysis.prediction.interval50.widthDays).toBeLessThan(
-      analysis.prediction.interval80.widthDays
+    expect(current(analysis.prediction).interval50.widthDays).toBeLessThanOrEqual(6);
+    expect(current(analysis.prediction).interval80.widthDays).toBeLessThanOrEqual(10);
+    expect(current(analysis.prediction).interval50.widthDays).toBeLessThan(
+      current(analysis.prediction).interval80.widthDays
     );
   });
 
@@ -74,8 +75,8 @@ describe('fixture: irregular cycles, mean 31, sd 7', () => {
   );
 
   it('widens the intervals compared with a regular cycle at the same cycle count', () => {
-    expect(analysis.prediction.interval80.widthDays).toBeGreaterThan(
-      regular.prediction.interval80.widthDays
+    expect(current(analysis.prediction).interval80.widthDays).toBeGreaterThan(
+      current(regular.prediction).interval80.widthDays
     );
     expect(analysis.posterior.predictive.standardDeviation).toBeGreaterThan(
       regular.posterior.predictive.standardDeviation
@@ -218,9 +219,9 @@ describe('fixture: long cycles around 45 days', () => {
   });
 
   it('produces a usable prediction rather than an absurd range', () => {
-    expect(analysis.prediction.interval80.widthDays).toBeLessThan(25);
-    expect(analysis.prediction.interval50.widthDays).toBeLessThan(
-      analysis.prediction.interval80.widthDays
+    expect(current(analysis.prediction).interval80.widthDays).toBeLessThan(25);
+    expect(current(analysis.prediction).interval50.widthDays).toBeLessThan(
+      current(analysis.prediction).interval80.widthDays
     );
     expect(analysis.posterior.mu).toBeGreaterThan(40);
     expect(analysis.posterior.mu).toBeLessThan(50);
@@ -262,7 +263,7 @@ describe('fixture: fewer than three cycles', () => {
     const analysis = analyzeLengths(lengths);
     expect(analysis.confidenceTier).toBe('low');
     expect(analysis.confidence).toBeLessThan(0.25);
-    expect(analysis.prediction.interval80.widthDays).toBeGreaterThan(10);
+    expect(current(analysis.prediction).interval80.widthDays).toBeGreaterThan(10);
     expect(analysis.coldStartMessage).toMatch(/deliberately wide/i);
   });
 
@@ -273,8 +274,8 @@ describe('fixture: fewer than three cycles', () => {
     const eight = analyzeLengths(
       generateCycleLengths({ count: 8, meanDays: 28, sdDays: 1, seed: 8 })
     );
-    expect(two.prediction.interval80.widthDays).toBeGreaterThan(
-      eight.prediction.interval80.widthDays
+    expect(current(two.prediction).interval80.widthDays).toBeGreaterThan(
+      current(eight.prediction).interval80.widthDays
     );
     expect(two.confidence).toBeLessThan(eight.confidence);
   });

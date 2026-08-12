@@ -9,8 +9,9 @@ import {
   summarizeCalibration,
 } from '../calibration';
 import { fitCycleLength } from '../cycleLength';
-import { predictNextStart } from '../prediction';
+import { nextStartEstimate } from '../prediction';
 import { analyze, logFromStartDates } from '../index';
+import { current } from './support';
 import type { CalibrationRecord } from '../types';
 
 function record(partial: Partial<CalibrationRecord> & { within80: boolean }): CalibrationRecord {
@@ -29,7 +30,10 @@ function record(partial: Partial<CalibrationRecord> & { within80: boolean }): Ca
 
 describe('gradePrediction', () => {
   const posterior = fitCycleLength([28, 28, 29, 28]);
-  const prediction = predictNextStart({
+  // The raw estimate rather than the presented prediction: calibration grades
+  // the numbers the model produced, which is what makes it independent of what
+  // a consumer is allowed to see.
+  const estimate = nextStartEstimate({
     lastStartDate: '2024-05-01',
     today: '2024-05-01',
     posterior,
@@ -38,24 +42,24 @@ describe('gradePrediction', () => {
   });
 
   it('records the signed error, positive when she was late', () => {
-    const late = gradePrediction(0, prediction, '2024-05-31');
-    expect(late.errorDays).toBe(diffDays(prediction.pointDate, '2024-05-31'));
+    const late = gradePrediction(0, estimate, '2024-05-31');
+    expect(late.errorDays).toBe(diffDays(estimate.pointDate, '2024-05-31'));
     expect(late.errorDays).toBeGreaterThan(0);
-    const early = gradePrediction(0, prediction, '2024-05-26');
+    const early = gradePrediction(0, estimate, '2024-05-26');
     expect(early.errorDays).toBeLessThan(0);
   });
 
   it('records whether the truth landed inside each interval', () => {
-    const graded = gradePrediction(0, prediction, prediction.interval80.range.end);
+    const graded = gradePrediction(0, estimate, estimate.interval80.range.end);
     expect(graded.within80).toBe(true);
-    const outside = gradePrediction(0, prediction, '2024-08-01');
+    const outside = gradePrediction(0, estimate, '2024-08-01');
     expect(outside.within80).toBe(false);
     expect(outside.within50).toBe(false);
   });
 
   it('treats the interval ends as inside', () => {
-    for (const edge of [prediction.interval50.range.start, prediction.interval50.range.end]) {
-      expect(gradePrediction(0, prediction, edge).within50).toBe(true);
+    for (const edge of [estimate.interval50.range.start, estimate.interval50.range.end]) {
+      expect(gradePrediction(0, estimate, edge).within50).toBe(true);
     }
   });
 });
@@ -215,17 +219,17 @@ describe('buildCalibration', () => {
     expect(analysis.calibration.widenFactor).toBeGreaterThan(1);
     expect(analysis.prediction.appliedWidenFactor).toBe(analysis.calibration.widenFactor);
 
-    const unwidened = predictNextStart({
+    const unwidened = nextStartEstimate({
       lastStartDate: '2024-09-04',
       today: '2024-09-10',
       posterior: analysis.posterior,
       usedCycleCount: analysis.usedCycleCount,
       loggedStartCount: analysis.cycles.length,
     });
-    expect(analysis.prediction.interval80.widthDays).toBeGreaterThan(
+    expect(current(analysis.prediction).interval80.widthDays).toBeGreaterThan(
       unwidened.interval80.widthDays
     );
-    expect(analysis.prediction.pointDate).toBe(unwidened.pointDate);
+    expect(current(analysis.prediction).pointDate).toBe(unwidened.pointDate);
   });
 
   it('is exposed on the analysis so the UI can show measured accuracy', () => {

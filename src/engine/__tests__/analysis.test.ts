@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { analyze, logFromStartDates } from '../index';
 import { addDays, compareDates, todayLocal } from '../date';
+import { current } from './support';
 import type { CycleLog } from '../types';
 
 const REGULAR_STARTS = [
@@ -50,15 +51,16 @@ describe('analyze', () => {
   });
 
   it('never returns a bare date without intervals around it', () => {
-    expect(analysis.prediction.pointDate).toBeDefined();
-    expect(analysis.prediction.interval50.range.start).toBeDefined();
-    expect(analysis.prediction.interval80.range.start).toBeDefined();
-    expect(analysis.prediction.summary).toContain(analysis.prediction.interval50.range.start);
-    expect(analysis.prediction.summary).toContain(analysis.prediction.interval80.range.end);
+    const prediction = current(analysis.prediction);
+    expect(prediction.pointDate).toBeDefined();
+    expect(prediction.interval50.range.start).toBeDefined();
+    expect(prediction.interval80.range.start).toBeDefined();
+    expect(prediction.summary).toContain(prediction.interval50.range.start);
+    expect(prediction.summary).toContain(prediction.interval80.range.end);
   });
 
   it('nests the point estimate inside both intervals, and 50 inside 80', () => {
-    const { interval50, interval80, pointDate } = analysis.prediction;
+    const { interval50, interval80, pointDate } = current(analysis.prediction);
     expect(compareDates(interval50.range.start, pointDate)).toBeLessThanOrEqual(0);
     expect(compareDates(pointDate, interval50.range.end)).toBeLessThanOrEqual(0);
     expect(compareDates(interval80.range.start, interval50.range.start)).toBeLessThanOrEqual(0);
@@ -68,14 +70,14 @@ describe('analyze', () => {
 
   it('anchors the prediction on the most recent logged start', () => {
     expect(analysis.prediction.lastStartDate).toBe('2024-05-20');
-    expect(analysis.prediction.pointDate).toBe(
+    expect(current(analysis.prediction).pointDate).toBe(
       addDays('2024-05-20', Math.round(analysis.prediction.expectedCycleLengthDays))
     );
   });
 
   it('labels the two intervals with their nominal levels', () => {
-    expect(analysis.prediction.interval50.level).toBe(0.5);
-    expect(analysis.prediction.interval80.level).toBe(0.8);
+    expect(current(analysis.prediction).interval50.level).toBe(0.5);
+    expect(current(analysis.prediction).interval80.level).toBe(0.8);
   });
 
   it('exposes phase, calibration, flags, and cold start together', () => {
@@ -112,23 +114,61 @@ describe('analyze', () => {
   });
 });
 
+/** Days of silence after the last logged start before the log counts as stale. */
+function firstStaleGap(starts: readonly string[]): number {
+  const lastStart = starts[starts.length - 1] as string;
+  for (let gap = 1; gap <= 400; gap += 1) {
+    const analysis = analyze(logFromStartDates(starts), { today: addDays(lastStart, gap) });
+    if (analysis.prediction.isStale) return gap;
+  }
+  throw new Error('never went stale within a year');
+}
+
+describe('a period that is running late', () => {
+  // Predicted start 2024-06-17 for this history, and the staleness bound falls
+  // on 2024-07-15, two expected cycles past the last logged start.
+  it('does not give up on itself a few days past the prediction', () => {
+    // The moment she is most likely to open the app is the moment it used to go
+    // blank: the 80% range ended on 2024-06-22, so a six day delay tipped the
+    // whole output into the stale state.
+    const late = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
+    expect(late.prediction.isStale).toBe(false);
+    expect(late.phases.isStale).toBe(false);
+    expect(late.currentPhase?.phase).toBe('late');
+    expect(late.currentPhase?.daysLate).toBe(6);
+    expect(current(late.prediction).interval80.range.end).toBe('2024-06-22');
+  });
+
+  it('suppresses the fertile window while late, as the stale state does', () => {
+    const late = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
+    expect(late.phases.isLate).toBe(true);
+    expect(late.phases.daysLate).toBe(6);
+    expect(late.phases.fertileWindow).toBeUndefined();
+    expect(late.phases.estimatedOvulationDate).toBeUndefined();
+  });
+
+  it('is not late on the predicted day minus one', () => {
+    const dayBefore = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-16' });
+    expect(dayBefore.currentPhase?.phase).not.toBe('late');
+    expect(dayBefore.phases.isLate).toBe(false);
+    expect(dayBefore.phases.fertileWindow).toBeDefined();
+  });
+});
+
 describe('a log she stopped keeping', () => {
-  // The 80% range for this history runs out on 2024-06-22. Everything below is
-  // stated against that bound rather than a day count, because the bound is the
-  // model's own claim about when the next period arrives.
-  const boundary = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-22' });
+  // Staleness needs both a far predictive quantile and two expected cycles of
+  // silence, which for this history puts the bound at 2024-07-15.
+  const boundary = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-07-15' });
 
   it('behaves normally right up to the last day the prediction covers', () => {
-    expect(boundary.prediction.interval80.range.end).toBe('2024-06-22');
     expect(boundary.prediction.isStale).toBe(false);
     expect(boundary.prediction.summary).toMatch(/next period most likely/i);
     expect(boundary.phases.isStale).toBe(false);
-    expect(boundary.phases.fertileWindow).toBeDefined();
-    expect(boundary.currentPhase?.phase).toBe('menstrual');
+    expect(boundary.currentPhase?.phase).toBe('late');
   });
 
   it('reports the stale state once today is past that bound', () => {
-    const stale = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
+    const stale = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-07-16' });
     expect(stale.currentPhase?.phase).toBe('stale');
     expect(stale.prediction.isStale).toBe(true);
   });
@@ -142,8 +182,20 @@ describe('a log she stopped keeping', () => {
     // The two false statements this replaces: a day count in the hundreds
     // presented as a period, and a "most likely" date months in the past.
     expect(stale.currentPhase?.summary).not.toMatch(/Period\./);
+    expect(stale.currentPhase?.dayOfCycle).toBeUndefined();
     expect(stale.prediction.summary).not.toMatch(/most likely/i);
     expect(stale.prediction.summary).toMatch(/out of date/i);
+  });
+
+  it('hands back no dates at all rather than past-dated ones', () => {
+    // A boolean beside a still-present pointDate only helps the consumer who
+    // remembers to read the boolean.
+    const stale = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-10-01' });
+    expect(stale.prediction.isStale).toBe(true);
+    expect(Object.keys(stale.prediction)).not.toContain('pointDate');
+    expect(Object.keys(stale.prediction)).not.toContain('interval50');
+    expect(Object.keys(stale.prediction)).not.toContain('interval80');
+    expect(() => current(stale.prediction)).toThrow(/stale/i);
   });
 
   it('recovers cleanly as soon as she logs again', () => {
@@ -152,9 +204,38 @@ describe('a log she stopped keeping', () => {
     });
     expect(resumed.prediction.isStale).toBe(false);
     expect(resumed.phases.isStale).toBe(false);
+    expect(resumed.phases.isLate).toBe(false);
     expect(resumed.phases.fertileWindow).toBeDefined();
     expect(resumed.currentPhase?.phase).not.toBe('stale');
     expect(resumed.currentPhase?.dayOfCycle).toBe(5);
+  });
+
+  it('needs two expected cycles of silence, not one late period', () => {
+    // The floor gate. Without it the bound came off the 80% interval, which the
+    // engine's own measured coverage says one normal cycle in ten crosses.
+    const lastStart = REGULAR_STARTS[REGULAR_STARTS.length - 1] as string;
+    expect(firstStaleGap(REGULAR_STARTS)).toBeGreaterThan(2 * 28 - 1);
+    const twoCyclesOn = analyze(logFromStartDates(REGULAR_STARTS), {
+      today: addDays(lastStart, 2 * 28 - 1),
+    });
+    expect(twoCyclesOn.prediction.isStale).toBe(false);
+  });
+
+  it('holds on longer for a history it is less sure about', () => {
+    // The quantile gate, which is why the bound is not just a multiple of her
+    // cycle length: an irregular history has not contradicted itself yet.
+    const erratic = [
+      '2024-01-01',
+      '2024-01-19',
+      '2024-03-02',
+      '2024-03-20',
+      '2024-05-03',
+      '2024-05-21',
+      '2024-07-04',
+      '2024-07-22',
+      '2024-09-04',
+    ];
+    expect(firstStaleGap(erratic)).toBeGreaterThan(firstStaleGap(REGULAR_STARTS));
   });
 
   it('reads differently from never having logged at all', () => {

@@ -152,6 +152,29 @@ export function fitCycleLength(
 }
 
 /**
+ * One-sided quantile of the posterior predictive, in days.
+ *
+ * `widenFactor` comes from layer 3 and stretches the distribution about its
+ * centre, so a quantile taken from it carries the same measured under-coverage
+ * correction the intervals do.
+ */
+export function predictiveQuantile(
+  predictive: StudentTPredictive,
+  probability: number,
+  widenFactor = 1
+): number {
+  if (!(probability > 0 && probability < 1)) {
+    throw new RangeError(`Probability must be in (0, 1): ${probability}`);
+  }
+  if (!(widenFactor >= 1)) {
+    throw new RangeError(`Widen factor must be at least 1: ${widenFactor}`);
+  }
+  const offset =
+    studentTQuantile(probability, predictive.degreesOfFreedom) * predictive.scale * widenFactor;
+  return predictive.location + offset;
+}
+
+/**
  * Central credible interval of the posterior predictive, in days.
  *
  * `widenFactor` comes from layer 3: when measured coverage has been running
@@ -165,15 +188,11 @@ export function predictiveInterval(
   if (!(level > 0 && level < 1)) {
     throw new RangeError(`Credible level must be in (0, 1): ${level}`);
   }
-  if (!(widenFactor >= 1)) {
-    throw new RangeError(`Widen factor must be at least 1: ${widenFactor}`);
-  }
   const tail = (1 - level) / 2;
-  const halfWidth =
-    Math.abs(studentTQuantile(1 - tail, predictive.degreesOfFreedom)) *
-    predictive.scale *
-    widenFactor;
-  return { low: predictive.location - halfWidth, high: predictive.location + halfWidth };
+  return {
+    low: predictiveQuantile(predictive, tail, widenFactor),
+    high: predictiveQuantile(predictive, 1 - tail, widenFactor),
+  };
 }
 
 /** Posterior median of cycle length. The Student-t is symmetric, so this is the location. */
