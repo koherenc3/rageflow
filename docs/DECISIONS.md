@@ -78,6 +78,22 @@ Conjugacy also means the update is closed form: no sampler, no convergence to ch
 
 **Consequences.** Two tuned constants (`SKIP_MEDIAN_MULTIPLE`, `SKIP_PREDICTIVE_SD_THRESHOLD`) and a minimum history before detection turns on, all documented in `src/engine/constants.ts`. False positives are possible for genuinely very irregular cycles, which is why the flag is a question rather than a silent deletion.
 
+## Implausible bleed lengths are excluded from the fit, not from her history
+
+**Decision.** A logged end date more than `MAX_FITTABLE_PERIOD_LENGTH_DAYS` after the start is kept on the derived cycle and shown, but left out of the period-length fit.
+
+**Reasoning.** The same argument as skip detection, one layer down. The period-length prior is 5 days with a 1.5 day spread and the assumed observation noise is a single day, so one 22 day bleed drags the learned length to about 19 and the app starts calling the first two thirds of the cycle menstruation. She will mistype an end date eventually, and a typo should not redefine what the app means by a period.
+
+**Consequences.** A genuinely very long bleed is not learned from either, which is the right trade when the alternative is a silently broken phase model. The exclusion lives in `observedPeriodLengths`, so nothing rewrites or hides what she typed.
+
+## Confidence is scaled against what the model can attain
+
+**Decision.** The reported confidence is the product of two factors, each measured against a limit derived from the model: `maxWeightSum()` for how much data the recency weighting can ever hold, and `minPredictiveSd()` for how tight the priors can ever make the predictive spread.
+
+**Reasoning.** Both quantities are bounded, and the first version of the scale ignored that. The weight sum saturates near 9.2 and the predictive spread bottoms out near 2.9 days, so the old shaping constants capped the number near 0.63 while advertising a 0.95 ceiling. The top quarter of a 0 to 1 scale was unreachable by construction, which makes the number mean something other than what it says. Deriving the endpoints from the priors means they cannot drift out of step if the priors change.
+
+**Consequences.** The ceiling is now reachable, and only by a long and very regular history: five years of cycles varying by about a day hit it, two years reach about 0.91, and one or two cycles report under 0.25. `src/engine/__tests__/confidence.test.ts` pins both ends so the mismatch cannot come back.
+
 ## Calibration is replayed, not stored
 
 **Decision.** Reconstruct the full prediction history from the log on every analysis, grading each prediction against what actually happened, using only the data available before that outcome.

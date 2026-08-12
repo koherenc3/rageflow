@@ -7,6 +7,8 @@ import {
   observedPeriodLengths,
 } from '../cycles';
 import { logFromStartDates } from '../index';
+import { learnPeriodLength } from '../phases';
+import { MAX_FITTABLE_PERIOD_LENGTH_DAYS, PERIOD_PRIOR_MEAN_DAYS } from '../constants';
 import type { CycleLog } from '../types';
 
 function startsOnly(dates: readonly string[]): CycleLog {
@@ -94,6 +96,58 @@ describe('logged end dates', () => {
   it('leaves period length absent when she only logs starts', () => {
     const { cycles } = deriveCycles(startsOnly(['2024-01-05', '2024-02-02']));
     expect(observedPeriodLengths(cycles)).toEqual([]);
+  });
+
+  it('fits a long but plausible bleed', () => {
+    const log: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-05', kind: 'period-start' },
+        // 15 days, the last length still treated as a period rather than a typo.
+        { date: '2024-01-19', kind: 'period-end' },
+        { date: '2024-02-02', kind: 'period-start' },
+      ],
+    };
+    const { cycles } = deriveCycles(log);
+    expect(cycles[0]?.periodLengthDays).toBe(MAX_FITTABLE_PERIOD_LENGTH_DAYS);
+    expect(observedPeriodLengths(cycles)).toEqual([MAX_FITTABLE_PERIOD_LENGTH_DAYS]);
+  });
+
+  it('keeps an implausible bleed in her history but out of the fit', () => {
+    const log: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-05', kind: 'period-start' },
+        // A mistyped end date: 22 days is not a period.
+        { date: '2024-01-26', kind: 'period-end' },
+        { date: '2024-02-02', kind: 'period-start' },
+        { date: '2024-02-06', kind: 'period-end' },
+        { date: '2024-03-02', kind: 'period-start' },
+      ],
+    };
+    const { cycles } = deriveCycles(log);
+    // Her own entry survives untouched.
+    expect(cycles[0]?.endDate).toBe('2024-01-26');
+    expect(cycles[0]?.periodLengthDays).toBe(22);
+    // Only the plausible one reaches the fit.
+    expect(observedPeriodLengths(cycles)).toEqual([5]);
+  });
+
+  it('does not let one mistyped end date redefine the period length', () => {
+    const typo = learnPeriodLength(
+      observedPeriodLengths(
+        deriveCycles({
+          version: 1,
+          entries: [
+            { date: '2024-01-05', kind: 'period-start' },
+            { date: '2024-01-26', kind: 'period-end' },
+            { date: '2024-02-02', kind: 'period-start' },
+          ],
+        }).cycles
+      )
+    );
+    expect(typo.isPrior).toBe(true);
+    expect(typo.meanDays).toBe(PERIOD_PRIOR_MEAN_DAYS);
   });
 });
 

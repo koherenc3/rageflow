@@ -57,7 +57,11 @@ export interface DerivedCycle {
   lengthDays?: number;
   /** Logged last day of bleeding, when she recorded one. */
   endDate?: ISODate;
-  /** Inclusive bleed length in days, when an end date was logged. */
+  /**
+   * Inclusive bleed length in days, when an end date was logged. Reported
+   * exactly as logged; an implausibly long one is kept here and left out of the
+   * fit by `observedPeriodLengths`.
+   */
   periodLengthDays?: number;
   /** True when this gap looks like two cycles with a missed start log. */
   suspectedMissedLog: boolean;

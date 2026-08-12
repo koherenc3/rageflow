@@ -38,7 +38,7 @@ Everything is seeded, so a failure is a real regression and never a flake. If a 
 | Drifting, 27 rising to 33 over 12 cycles | Recency-weighted fit sits above an unweighted one, lands closer to the recent truth, and has lower out-of-sample error over the second half. Holds across five seeds         |
 | Two cycles recorded as one               | Gap flagged and excluded, and neither the mean nor the variance is poisoned. Left in, the merged gap more than doubles the predictive spread; handled, it moves it under 20% |
 | Long cycles, around 45 days              | Clinical flag fires on every cycle over 45 days, no missed-log false positives, 80% interval under 25 days, every output finite                                              |
-| Fewer than three cycles                  | Cold-start wording present and explicit, intervals wide, confidence under 0.35, two cycles strictly wider than eight                                                         |
+| Fewer than three cycles                  | Cold-start wording present and explicit, intervals wide, confidence under 0.25, two cycles strictly wider than eight                                                         |
 
 ## The two headline properties
 

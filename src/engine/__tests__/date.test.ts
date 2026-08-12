@@ -39,6 +39,23 @@ describe('validation', () => {
     expect(() => addDays('2024-01-01', 1.5)).toThrow(RangeError);
     expect(() => formatDate({ year: 2024, month: 2, day: 30 })).toThrow(RangeError);
   });
+
+  it('rejects negative calendar fields instead of dropping the sign', () => {
+    // A negative month or day used to come back as a perfectly plausible date,
+    // which is the one thing this module promises never to do.
+    expect(() => formatDate({ year: 2024, month: -3, day: 5 })).toThrow(RangeError);
+    expect(() => formatDate({ year: 2024, month: 3, day: -5 })).toThrow(RangeError);
+    expect(() => formatDate({ year: -2024, month: 3, day: 5 })).toThrow(RangeError);
+  });
+
+  it('rejects out of range months and days', () => {
+    expect(() => formatDate({ year: 2024, month: 0, day: 5 })).toThrow(RangeError);
+    expect(() => formatDate({ year: 2024, month: 13, day: 5 })).toThrow(RangeError);
+    expect(() => formatDate({ year: 2024, month: 3, day: 0 })).toThrow(RangeError);
+    expect(() => formatDate({ year: 2024, month: 3, day: 32 })).toThrow(RangeError);
+    expect(() => formatDate({ year: 2023, month: 2, day: 29 })).toThrow(RangeError);
+    expect(formatDate({ year: 2024, month: 2, day: 29 })).toBe('2024-02-29');
+  });
 });
 
 describe('parse and format', () => {

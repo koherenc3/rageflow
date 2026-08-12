@@ -48,8 +48,9 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
   const posterior = fitCycleLength(lengths);
   const calibration = buildCalibration(cycles);
 
+  const lastStart = lastStartDate(cycles);
   const prediction = predictNextStart({
-    ...(lastStartDate(cycles) === undefined ? {} : { lastStartDate: lastStartDate(cycles) }),
+    ...(lastStart === undefined ? {} : { lastStartDate: lastStart }),
     today,
     posterior,
     usedCycleCount: lengths.length,
@@ -120,7 +121,14 @@ export {
 } from './date';
 export type { ISODate, CalendarParts } from './date';
 export { deriveCycles, fittableLengths, observedPeriodLengths } from './cycles';
-export { fitCycleLength, predictiveInterval, priorPosterior, recencyWeights } from './cycleLength';
+export {
+  fitCycleLength,
+  maxWeightSum,
+  minPredictiveSd,
+  predictiveInterval,
+  priorPosterior,
+  recencyWeights,
+} from './cycleLength';
 export { predictNextStart } from './prediction';
 export {
   buildPhaseModel,

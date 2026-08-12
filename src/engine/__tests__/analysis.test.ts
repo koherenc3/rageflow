@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { analyze, logFromStartDates } from '../index';
 import { addDays, compareDates, todayLocal } from '../date';
 import type { CycleLog } from '../types';
@@ -31,7 +31,17 @@ describe('analyze', () => {
   });
 
   it('defaults to the host local calendar date', () => {
-    expect(analyze({ version: 1, entries: [] }).today).toBe(todayLocal());
+    // The clock is pinned rather than read twice and compared: two independent
+    // reads can straddle midnight. Late evening local time, which is the case
+    // that breaks if the default ever goes through UTC.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2024, 2, 9, 23, 30, 0));
+      expect(analyze({ version: 1, entries: [] }).today).toBe('2024-03-09');
+      expect(analyze({ version: 1, entries: [] }).today).toBe(todayLocal());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('derives one cycle per logged start', () => {

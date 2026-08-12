@@ -69,7 +69,7 @@ export function parseDate(date: ISODate): CalendarParts {
 }
 
 function pad(value: number, width: number): string {
-  return String(Math.abs(value)).padStart(width, '0');
+  return String(value).padStart(width, '0');
 }
 
 /** Build a `YYYY-MM-DD` string from calendar fields. Throws on impossible dates. */
@@ -78,8 +78,17 @@ export function formatDate(parts: CalendarParts): ISODate {
   if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
     throw new RangeError('Calendar parts must be integers');
   }
+  // Every field is range checked before it is padded. Padding a negative number
+  // would either drop the sign or produce a string the pattern rejects, and
+  // both of those turn a caller's mistake into a plausible looking date.
   if (year < 0 || year > 9999) {
     throw new RangeError(`Year out of supported range: ${year}`);
+  }
+  if (month < 1 || month > 12) {
+    throw new RangeError(`Month out of supported range: ${month}`);
+  }
+  if (day < 1 || day > daysInMonth(year, month)) {
+    throw new RangeError(`Day out of supported range for ${year}-${month}: ${day}`);
   }
   const formatted = `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}`;
   assertValid(formatted);

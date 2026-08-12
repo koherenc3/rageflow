@@ -261,7 +261,7 @@ describe('fixture: fewer than three cycles', () => {
     const lengths = generateCycleLengths({ count: 2, meanDays: 28, sdDays: 1, seed: 7 });
     const analysis = analyzeLengths(lengths);
     expect(analysis.confidenceTier).toBe('low');
-    expect(analysis.confidence).toBeLessThan(0.35);
+    expect(analysis.confidence).toBeLessThan(0.25);
     expect(analysis.prediction.interval80.widthDays).toBeGreaterThan(10);
     expect(analysis.coldStartMessage).toMatch(/deliberately wide/i);
   });

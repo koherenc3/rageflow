@@ -156,6 +156,14 @@ describe('studentTQuantile', () => {
     expect(() => studentTQuantile(-0.1, 5)).toThrow(RangeError);
     expect(() => studentTQuantile(0.5, -1)).toThrow(RangeError);
   });
+
+  it('throws rather than returning the bound when the bracket overruns', () => {
+    // Fractional degrees of freedom put so much mass in the tail that the
+    // search never brackets the quantile. Handing back the bound would look
+    // like an answer and turn into a date three billion years out.
+    expect(() => studentTQuantile(0.99, 0.1)).toThrow(RangeError);
+    expect(() => studentTQuantile(0.95, 0.05)).toThrow(RangeError);
+  });
 });
 
 describe('studentTStandardDeviation', () => {

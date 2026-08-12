@@ -3,11 +3,19 @@ import {
   COLD_START_MODERATE_MAX_CYCLES,
   CONFIDENCE_MAX,
   CONFIDENCE_SD_CEILING_DAYS,
-  CONFIDENCE_SD_FLOOR_DAYS,
-  CONFIDENCE_WEIGHT_SATURATION,
 } from './constants';
+import { maxWeightSum, minPredictiveSd } from './cycleLength';
 import { clamp } from './stats';
 import type { ConfidenceTier } from './types';
+
+/**
+ * The two endpoints the scale is measured against, both of them properties of
+ * the model rather than knobs. Scaling against an unreachable ideal instead
+ * would leave the top of the range permanently empty and make the number mean
+ * something different from what it says.
+ */
+const MAX_WEIGHT_SUM = maxWeightSum();
+const MIN_PREDICTIVE_SD = minPredictiveSd();
 
 /**
  * Cold start behaviour lives here, in the engine, so the UI cannot accidentally
@@ -28,13 +36,18 @@ export function confidenceTierFor(usedCycleCount: number): ConfidenceTier {
  * Both matter and neither substitutes for the other: six cycles of wildly
  * variable length should not read as confident, and one cycle should not read
  * as confident just because the interval happens to be narrow.
+ *
+ * Each factor is a share of what the model can attain, so 1 means "as much data
+ * as the recency weighting can ever hold" and "as tight as these priors can ever
+ * be" rather than an unreachable ideal. Only a long and very regular history
+ * gets near the top; a cycle or two still lands well down the scale.
  */
 export function confidenceFor(weightSum: number, predictiveSd: number): number {
   if (weightSum <= 0) return 0;
-  const dataFactor = weightSum / (weightSum + CONFIDENCE_WEIGHT_SATURATION);
+  const dataFactor = clamp(weightSum / MAX_WEIGHT_SUM, 0, 1);
   const spread = Number.isFinite(predictiveSd) ? predictiveSd : CONFIDENCE_SD_CEILING_DAYS;
   const precisionFactor = clamp(
-    (CONFIDENCE_SD_CEILING_DAYS - spread) / (CONFIDENCE_SD_CEILING_DAYS - CONFIDENCE_SD_FLOOR_DAYS),
+    (CONFIDENCE_SD_CEILING_DAYS - spread) / (CONFIDENCE_SD_CEILING_DAYS - MIN_PREDICTIVE_SD),
     0,
     1
   );

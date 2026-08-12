@@ -136,6 +136,10 @@ export function buildCalibration(cycles: readonly DerivedCycle[]): CalibrationSu
   const records: CalibrationRecord[] = [];
   const acceptedLengths: number[] = [];
   let loggedStartCount = 0;
+  // The widen factor needs nothing from the records but how many there are and
+  // how many landed inside the 80% range, so both are carried forward rather
+  // than recomputed from the whole list at every step.
+  let within80Count = 0;
 
   for (const cycle of cycles) {
     loggedStartCount += 1;
@@ -143,16 +147,19 @@ export function buildCalibration(cycles: readonly DerivedCycle[]): CalibrationSu
     if (cycle.suspectedMissedLog) continue;
 
     const posterior = fitCycleLength(acceptedLengths);
+    const coverage80SoFar = records.length === 0 ? Number.NaN : within80Count / records.length;
     const prediction = predictNextStart({
       lastStartDate: cycle.startDate,
       today: cycle.startDate,
       posterior,
       usedCycleCount: acceptedLengths.length,
       loggedStartCount,
-      widenFactor: summarizeCalibration(records).widenFactor,
+      widenFactor: widenFactorFor(records.length, coverage80SoFar),
     });
 
-    records.push(gradePrediction(cycle.index, prediction, cycle.nextStartDate));
+    const record = gradePrediction(cycle.index, prediction, cycle.nextStartDate);
+    records.push(record);
+    if (record.within80) within80Count += 1;
     acceptedLengths.push(cycle.lengthDays);
   }
 

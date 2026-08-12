@@ -15,6 +15,7 @@
 import {
   CLINICAL_LONG_CYCLE_DAYS,
   CLINICAL_SHORT_CYCLE_DAYS,
+  MAX_FITTABLE_PERIOD_LENGTH_DAYS,
   SKIP_MEDIAN_MULTIPLE,
   SKIP_MIN_ACCEPTED_CYCLES,
   SKIP_PREDICTIVE_SD_THRESHOLD,
@@ -138,7 +139,10 @@ export function deriveCycles(log: CycleLog): DerivationResult {
         nextStartDate,
         gapDays: lengthDays,
         runningMedianDays: judgement.runningMedianDays,
-        question: `There are ${lengthDays} days between ${startDate} and ${nextStartDate}, about twice your usual ${Math.round(judgement.runningMedianDays)}. Did a period start in between and not get logged?`,
+        // No ratio and no tuning constant in the wording: the gate can fire
+        // anywhere from a little over the threshold upwards, so the only claim
+        // the sentence can always make is that the gap is longer than usual.
+        question: `There are ${lengthDays} days between ${startDate} and ${nextStartDate}, longer than your usual ${Math.round(judgement.runningMedianDays)} days. Did a period start in between and not get logged?`,
       });
     } else {
       acceptedLengths.push(lengthDays);
@@ -171,11 +175,22 @@ export function fittableLengths(cycles: readonly DerivedCycle[]): number[] {
   return lengths;
 }
 
-/** Observed bleed lengths, for the period-length parameter. */
+/**
+ * Observed bleed lengths that should go into the period-length fit.
+ *
+ * An end date logged weeks after the start is a typo, not a three week period,
+ * and the fit is credulous enough that one of them would redefine what the app
+ * calls menstruation. Implausible ones are left out of the fit here, exactly as
+ * a suspected missed log is left out of the cycle-length fit. The entry stays on
+ * the derived cycle, so her own history still shows what she actually recorded.
+ */
 export function observedPeriodLengths(cycles: readonly DerivedCycle[]): number[] {
   const lengths: number[] = [];
   for (const cycle of cycles) {
-    if (cycle.periodLengthDays !== undefined) lengths.push(cycle.periodLengthDays);
+    const length = cycle.periodLengthDays;
+    if (length === undefined) continue;
+    if (length > MAX_FITTABLE_PERIOD_LENGTH_DAYS) continue;
+    lengths.push(length);
   }
   return lengths;
 }

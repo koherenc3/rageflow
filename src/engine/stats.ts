@@ -100,6 +100,7 @@ export function studentTCdf(t: number, df: number): number {
 
 const QUANTILE_TOLERANCE = 1e-10;
 const QUANTILE_MAX_ITERATIONS = 200;
+const QUANTILE_MAX_BRACKET = 1e12;
 
 /**
  * Inverse CDF of the standard Student-t distribution.
@@ -125,7 +126,11 @@ export function studentTQuantile(p: number, df: number): number {
   let hi = 1;
   while (studentTCdf(hi, df) < p) {
     hi *= 2;
-    if (hi > 1e12) return hi;
+    if (hi > QUANTILE_MAX_BRACKET) {
+      // Returning the bound would hand back a number no caller could tell from
+      // a real quantile, and the interval built on it would be nonsense.
+      throw new RangeError(`Could not bracket the t quantile for p=${p}, df=${df}`);
+    }
   }
   let lo = 0;
   for (let i = 0; i < QUANTILE_MAX_ITERATIONS; i += 1) {

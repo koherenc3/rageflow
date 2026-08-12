@@ -39,6 +39,40 @@ export function recencyWeights(
   return weights;
 }
 
+/**
+ * The largest weight sum the recency weighting can ever produce.
+ *
+ * The weights are a geometric series with ratio `0.5 ^ (1 / halfLife)`, so
+ * however many cycles she logs the effective sample size converges on
+ * `1 / (1 - ratio)`, about 9.2 at a half life of 6. That ceiling is the price of
+ * tracking drift; see docs/RESEARCH.md. Anything that wants to say how much
+ * data the fit rests on has to measure against this and not against infinity.
+ */
+export function maxWeightSum(halfLife: number = RECENCY_HALF_LIFE_CYCLES): number {
+  if (halfLife <= 0) throw new RangeError(`Half life must be positive: ${halfLife}`);
+  return 1 / (1 - Math.pow(0.5, 1 / halfLife));
+}
+
+/**
+ * The tightest predictive standard deviation this model can ever report.
+ *
+ * The best case is a saturated history of cycles that are all exactly the prior
+ * mean, so the observed spread contributes nothing at all. Even then the prior
+ * on the variance does not wash out, and the predictive spread bottoms out near
+ * three days. Like {@link maxWeightSum} this is a fact about the model rather
+ * than a tuning choice, and it is the honest zero point for how tight an
+ * interval the engine can ever claim.
+ */
+export function minPredictiveSd(halfLife: number = RECENCY_HALF_LIFE_CYCLES): number {
+  const weightSum = maxWeightSum(halfLife);
+  return predictiveFrom(
+    PRIOR_MU0,
+    PRIOR_KAPPA0 + weightSum,
+    PRIOR_ALPHA0 + weightSum / 2,
+    PRIOR_BETA0
+  ).standardDeviation;
+}
+
 function predictiveFrom(
   mu: number,
   kappa: number,
