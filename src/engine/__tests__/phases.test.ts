@@ -22,15 +22,28 @@ import {
 import { analyze, logFromStartDates } from '../index';
 import type { CycleLog } from '../types';
 
-function inputsFor(starts: readonly string[], predictedNextStart: string): PhaseInputs {
+/**
+ * A staleness bound far enough out that these cases never trip it. The stale
+ * state has its own describe block below, where the bound is set deliberately.
+ */
+const NEVER_STALE = '2099-12-31';
+
+function inputsFor(
+  starts: readonly string[],
+  predictedNextStart: string,
+  overrides: Partial<PhaseInputs> = {}
+): PhaseInputs {
   const { cycles } = deriveCycles(logFromStartDates(starts));
   return {
     cycles,
     predictedNextStart,
+    predictionValidThrough: NEVER_STALE,
+    today: predictedNextStart,
     lutealLength: learnLutealLength(),
     periodLength: learnPeriodLength(),
     confidence: 0.5,
     confidenceTier: 'moderate',
+    ...overrides,
   };
 }
 
@@ -138,6 +151,8 @@ describe('one mistyped end date does not redefine what the app calls a period', 
   const inputs: PhaseInputs = {
     cycles,
     predictedNextStart: '2024-03-25',
+    predictionValidThrough: '2024-04-05',
+    today: '2024-03-25',
     lutealLength: learnLutealLength(),
     periodLength: learnPeriodLength(observed),
     confidence: 0.5,
@@ -202,7 +217,62 @@ describe('buildPhaseModel', () => {
     const empty = buildPhaseModel(inputsFor([], '2024-03-25'));
     expect(empty.estimatedOvulationDate).toBeUndefined();
     expect(empty.fertileWindow).toBeUndefined();
+    expect(empty.isStale).toBe(false);
     expect(empty.fertilityIsEstimateNotContraception).toBe(true);
+  });
+});
+
+describe('a log that has gone stale', () => {
+  // Predicted start 2024-03-25, and the 80% range runs out on 2024-04-05.
+  const starts = ['2024-01-01', '2024-01-29', '2024-02-26'];
+  const validThrough = '2024-04-05';
+
+  function on(today: string): PhaseInputs {
+    return inputsFor(starts, '2024-03-25', { predictionValidThrough: validThrough, today });
+  }
+
+  it('still behaves normally on the last day the prediction covers', () => {
+    const inputs = on(validThrough);
+    const model = buildPhaseModel(inputs);
+    expect(model.isStale).toBe(false);
+    expect(model.fertileWindow).toBeDefined();
+    expect(phaseForDate(inputs, validThrough)?.phase).toBe('menstrual');
+  });
+
+  it('goes stale the day after, rather than reporting a phase it cannot support', () => {
+    const inputs = on('2024-04-06');
+    expect(phaseForDate(inputs, '2024-04-06')?.phase).toBe('stale');
+  });
+
+  it('drops the fertile window and the ovulation estimate entirely', () => {
+    // The part that matters most. The likeliest reasons for months of silence
+    // are pregnancy, illness, or having stopped using the app, and a months old
+    // fertile window is wrong in all three.
+    const model = buildPhaseModel(on('2024-08-01'));
+    expect(model.isStale).toBe(true);
+    expect(model.fertileWindow).toBeUndefined();
+    expect(model.estimatedOvulationDate).toBeUndefined();
+    expect(model.premenstrualWindow).toBeUndefined();
+    expect(model.menstrualWindow).toBeUndefined();
+    // The learned parameters are still facts about her history, so they stay.
+    expect(model.periodLength.meanDays).toBe(PERIOD_PRIOR_MEAN_DAYS);
+  });
+
+  it('does not claim she is bleeding four months into the silence', () => {
+    const estimate = phaseForDate(on('2024-08-01'), '2024-08-01');
+    expect(estimate?.phase).toBe('stale');
+    expect(estimate?.summary).not.toMatch(/Period\./);
+    expect(estimate?.summary).toMatch(/log a period start/i);
+    // The day count is still the honest number of days since her last start.
+    expect(estimate?.dayOfCycle).toBe(diffDays('2024-02-26', '2024-08-01') + 1);
+  });
+
+  it('leaves completed cycles alone, however long ago they were', () => {
+    // Only the in-progress cycle is anchored to a prediction, so history stays
+    // readable no matter how stale the present is.
+    const inputs = on('2024-08-01');
+    expect(phaseForDate(inputs, '2024-01-16')?.phase).toBe('fertile');
+    expect(phaseForDate(inputs, '2024-01-01')?.phase).toBe('menstrual');
   });
 });
 

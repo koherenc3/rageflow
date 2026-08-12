@@ -7,7 +7,7 @@
  * cycle apps get wrong.
  */
 
-import { addRoundedDays, diffDays, type ISODate } from './date';
+import { addRoundedDays, compareDates, diffDays, type ISODate } from './date';
 import { INTERVAL_50, INTERVAL_80 } from './constants';
 import { predictiveInterval } from './cycleLength';
 import { coldStartMessage, confidenceFor, confidenceTierFor, isPersonalized } from './confidence';
@@ -55,21 +55,43 @@ export function predictNextStart(input: PredictNextStartInput): NextStartPredict
   const interval50 = intervalFrom(anchor, posterior, INTERVAL_50, widenFactor);
   const interval80 = intervalFrom(anchor, posterior, INTERVAL_80, widenFactor);
 
-  const confidence = confidenceFor(posterior.weightSum, posterior.predictive.standardDeviation);
+  const confidence = confidenceFor(
+    posterior.weightSum,
+    posterior.predictive.standardDeviation,
+    posterior.halfLife
+  );
   const confidenceTier = confidenceTierFor(usedCycleCount);
   const personalized = isPersonalized(usedCycleCount);
+
+  // Once today is past the far end of the 80% range, this prediction has been
+  // contradicted by the calendar: the period it describes did not arrive, or it
+  // did and was not logged. Either way the dates below are in the past, and a
+  // sentence beginning "next period most likely around" would be a plain false
+  // statement. The threshold is the model's own interval rather than a day
+  // count, so a regular history gives up on itself sooner than a variable one.
+  const staleSince =
+    lastStartDate !== undefined && compareDates(today, interval80.range.end) > 0
+      ? lastStartDate
+      : undefined;
 
   const basis =
     lastStartDate === undefined
       ? `Counting from today, ${today}, because no period has been logged yet.`
       : `Counting from your last logged start, ${lastStartDate}.`;
 
-  const summary = [
-    `Next period most likely around ${pointDate}.`,
-    `There is a 50% chance it falls between ${interval50.range.start} and ${interval50.range.end}, and an 80% chance between ${interval80.range.start} and ${interval80.range.end}.`,
-    basis,
-    coldStartMessage(usedCycleCount, loggedStartCount),
-  ].join(' ');
+  const summary =
+    staleSince !== undefined
+      ? [
+          `This prediction is out of date. Your last logged period start was ${staleSince}, ${diffDays(staleSince, today)} days ago, which is past the ${interval80.range.end} end of the 80% range it claimed.`,
+          'Log a period start, either one you missed or your next one, to get a current estimate.',
+          coldStartMessage(usedCycleCount, loggedStartCount),
+        ].join(' ')
+      : [
+          `Next period most likely around ${pointDate}.`,
+          `There is a 50% chance it falls between ${interval50.range.start} and ${interval50.range.end}, and an 80% chance between ${interval80.range.start} and ${interval80.range.end}.`,
+          basis,
+          coldStartMessage(usedCycleCount, loggedStartCount),
+        ].join(' ');
 
   return {
     ...(lastStartDate === undefined ? {} : { lastStartDate }),
@@ -81,6 +103,7 @@ export function predictNextStart(input: PredictNextStartInput): NextStartPredict
     confidence,
     confidenceTier,
     personalized,
+    isStale: staleSince !== undefined,
     summary,
   };
 }

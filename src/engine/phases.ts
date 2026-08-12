@@ -104,6 +104,17 @@ export interface PhaseInputs {
   cycles: readonly DerivedCycle[];
   /** Predicted start of the next cycle, from layer 1. */
   predictedNextStart: ISODate;
+  /**
+   * Last date the current cycle's windows still describe, which is the far end
+   * of the prediction's own 80% interval. Past it the model has been
+   * contradicted by the calendar and everything anchored to the last logged
+   * start is stale. Taking the bound from the interval rather than a fixed
+   * number of days means a regular history gives up on itself sooner than a
+   * variable one, which is the right way round.
+   */
+  predictionValidThrough: ISODate;
+  /** The day the model is being built for. Only staleness depends on it. */
+  today: ISODate;
   lutealLength: LearnedLength;
   periodLength: LearnedLength;
   confidence: number;
@@ -141,10 +152,28 @@ function windowsFor(cycleStart: ISODate, cycleEnd: ISODate, inputs: PhaseInputs)
 }
 
 /**
+ * True when `date` sits past everything the current cycle's model can account
+ * for.
+ *
+ * Only the in-progress cycle can go stale. A completed cycle is bounded by a
+ * real next start, so its windows are anchored to what happened rather than to
+ * a prediction and stay correct forever.
+ */
+function isStaleOn(inputs: PhaseInputs, cycle: DerivedCycle, date: ISODate): boolean {
+  return cycle.nextStartDate === undefined && compareDates(date, inputs.predictionValidThrough) > 0;
+}
+
+/**
  * The current cycle's windows, or an empty model when nothing has been logged.
  *
  * The current cycle runs from the last logged start to the predicted next
  * start.
+ *
+ * When the log has gone stale every window is dropped rather than relabelled.
+ * The most likely reasons someone stops logging for months are pregnancy,
+ * illness, or having given up on the app, and in all three a confidently
+ * rendered fertile window from months ago is wrong. Suppressing it here means a
+ * consumer cannot show one by forgetting to check a flag.
  */
 export function buildPhaseModel(inputs: PhaseInputs): PhaseModel {
   const lastCycle = inputs.cycles[inputs.cycles.length - 1];
@@ -152,6 +181,15 @@ export function buildPhaseModel(inputs: PhaseInputs): PhaseModel {
     return {
       lutealLength: inputs.lutealLength,
       periodLength: inputs.periodLength,
+      isStale: false,
+      fertilityIsEstimateNotContraception: true,
+    };
+  }
+  if (isStaleOn(inputs, lastCycle, inputs.today)) {
+    return {
+      lutealLength: inputs.lutealLength,
+      periodLength: inputs.periodLength,
+      isStale: true,
       fertilityIsEstimateNotContraception: true,
     };
   }
@@ -163,6 +201,7 @@ export function buildPhaseModel(inputs: PhaseInputs): PhaseModel {
     fertileWindow: windows.fertile,
     premenstrualWindow: windows.premenstrual,
     menstrualWindow: windows.menstrual,
+    isStale: false,
     fertilityIsEstimateNotContraception: true,
   };
 }
@@ -194,6 +233,11 @@ function phaseSummary(phase: CyclePhase, windows: CycleWindows, dayOfCycle: numb
       return `Day ${dayOfCycle}. Luteal phase, after the estimated fertile window.`;
     case 'premenstrual':
       return `Day ${dayOfCycle}. The last few days before the period is expected on ${windows.cycleEnd}.`;
+    case 'stale':
+      // Deliberately says nothing about why. She may be late, she may have
+      // missed a log, she may be pregnant. The engine cannot tell those apart
+      // from start dates, so it names only what it does know.
+      return `Day ${dayOfCycle}. Your last logged period start was ${windows.cycleStart}, further back than this estimate reaches, so there is nothing current to report. Log a period start, either one you missed or your next one, and this will pick up again.`;
   }
 }
 
@@ -208,9 +252,16 @@ function classify(date: ISODate, windows: CycleWindows): CyclePhase {
  * Phase for any date on or after the first logged period start.
  *
  * Returns undefined before the first logged start, where there is genuinely
- * nothing to say. Dates at or beyond the predicted next start are reported as
- * menstrual: the period is expected, and saying "overdue" would overstate how
- * precisely the engine knows anything.
+ * nothing to say.
+ *
+ * Three cases past the predicted next start, in order of how far past it is.
+ * Inside the predicted range the day is reported as menstrual: the period is
+ * expected, and saying "overdue" would overstate how precisely the engine knows
+ * anything. Past the far end of the 80% interval that reasoning runs out, since
+ * the model's own claim has been contradicted, and the day is `stale` instead.
+ * Reporting "Day 127. Period." after four months of silence is a plainly false
+ * statement, and it is a worse failure than the overdue claim the menstrual case
+ * exists to avoid.
  */
 export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate | undefined {
   const cycle = enclosingCycle(inputs.cycles, date);
@@ -220,10 +271,14 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
   const windows = windowsFor(cycle.startDate, cycleEnd, inputs);
   const dayOfCycle = diffDays(cycle.startDate, date) + 1;
 
-  const phase: CyclePhase =
-    cycle.nextStartDate === undefined && compareDates(date, cycleEnd) >= 0
-      ? 'menstrual'
-      : classify(date, windows);
+  let phase: CyclePhase;
+  if (isStaleOn(inputs, cycle, date)) {
+    phase = 'stale';
+  } else if (cycle.nextStartDate === undefined && compareDates(date, cycleEnd) >= 0) {
+    phase = 'menstrual';
+  } else {
+    phase = classify(date, windows);
+  }
 
   return {
     date,

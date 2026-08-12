@@ -58,12 +58,18 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
     widenFactor: calibration.widenFactor,
   });
 
-  const confidence = confidenceFor(posterior.weightSum, posterior.predictive.standardDeviation);
+  const confidence = confidenceFor(
+    posterior.weightSum,
+    posterior.predictive.standardDeviation,
+    posterior.halfLife
+  );
   const confidenceTier = confidenceTierFor(lengths.length);
 
   const phaseInputs: PhaseInputs = {
     cycles,
     predictedNextStart: prediction.pointDate,
+    predictionValidThrough: prediction.interval80.range.end,
+    today,
     lutealLength: learnLutealLength(options.lutealObservations ?? []),
     periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
     confidence,

@@ -112,6 +112,65 @@ describe('analyze', () => {
   });
 });
 
+describe('a log she stopped keeping', () => {
+  // The 80% range for this history runs out on 2024-06-22. Everything below is
+  // stated against that bound rather than a day count, because the bound is the
+  // model's own claim about when the next period arrives.
+  const boundary = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-22' });
+
+  it('behaves normally right up to the last day the prediction covers', () => {
+    expect(boundary.prediction.interval80.range.end).toBe('2024-06-22');
+    expect(boundary.prediction.isStale).toBe(false);
+    expect(boundary.prediction.summary).toMatch(/next period most likely/i);
+    expect(boundary.phases.isStale).toBe(false);
+    expect(boundary.phases.fertileWindow).toBeDefined();
+    expect(boundary.currentPhase?.phase).toBe('menstrual');
+  });
+
+  it('reports the stale state once today is past that bound', () => {
+    const stale = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
+    expect(stale.currentPhase?.phase).toBe('stale');
+    expect(stale.prediction.isStale).toBe(true);
+  });
+
+  it('shows no fertile window and no ovulation estimate months later', () => {
+    const stale = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-10-01' });
+    expect(stale.phases.isStale).toBe(true);
+    expect(stale.phases.fertileWindow).toBeUndefined();
+    expect(stale.phases.estimatedOvulationDate).toBeUndefined();
+    expect(stale.currentPhase?.phase).toBe('stale');
+    // The two false statements this replaces: a day count in the hundreds
+    // presented as a period, and a "most likely" date months in the past.
+    expect(stale.currentPhase?.summary).not.toMatch(/Period\./);
+    expect(stale.prediction.summary).not.toMatch(/most likely/i);
+    expect(stale.prediction.summary).toMatch(/out of date/i);
+  });
+
+  it('recovers cleanly as soon as she logs again', () => {
+    const resumed = analyze(logFromStartDates([...REGULAR_STARTS, '2024-10-01']), {
+      today: '2024-10-05',
+    });
+    expect(resumed.prediction.isStale).toBe(false);
+    expect(resumed.phases.isStale).toBe(false);
+    expect(resumed.phases.fertileWindow).toBeDefined();
+    expect(resumed.currentPhase?.phase).not.toBe('stale');
+    expect(resumed.currentPhase?.dayOfCycle).toBe(5);
+  });
+
+  it('reads differently from never having logged at all', () => {
+    // Two different states. The cold start wording is about not being
+    // personalized; the stale wording is about being out of date.
+    const cold = analyze({ version: 1, entries: [] }, { today: '2024-10-01' });
+    const stale = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-10-01' });
+    expect(cold.prediction.isStale).toBe(false);
+    expect(cold.phases.isStale).toBe(false);
+    expect(cold.currentPhase).toBeUndefined();
+    expect(cold.coldStartMessage).toMatch(/no periods logged yet/i);
+    expect(stale.coldStartMessage).toMatch(/5 cycles/);
+    expect(stale.prediction.summary).not.toBe(cold.prediction.summary);
+  });
+});
+
 describe('forward compatibility of the data model', () => {
   it('ignores entry kinds it does not know about rather than failing', () => {
     const log = {

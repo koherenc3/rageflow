@@ -86,9 +86,23 @@ Conjugacy also means the update is closed form: no sampler, no convergence to ch
 
 **Consequences.** Learned period length now moves only on repeated consistent evidence: four entries match the prior's weight, twelve outweigh it three to one, and someone whose period really runs 7 or 8 days still converges there. A genuinely very long bleed is still not learned from, which is the right trade when the alternative is a silently broken phase model. The exclusion lives in `observedPeriodLengths`, so nothing rewrites or hides what she typed. `classify` deliberately still tests menstrual first: if she is actually bleeding, that is what the day is.
 
+## A log that stops has its own state, and it supersedes reporting menstrual
+
+**Decision.** There is a sixth phase, `stale`. Once the day being reported on is past the far end of the prediction's own 80% interval, `phaseForDate` returns `stale`, `buildPhaseModel` returns no ovulation estimate and no fertile, premenstrual, or menstrual window at all, and `NextStartPrediction.isStale` is true with a summary that says the prediction is out of date instead of naming a past date as what to expect next. This deliberately supersedes the earlier decision to report menstrual for any date at or beyond the predicted start. That decision still holds inside the interval, which is where its reasoning applies.
+
+**Reasoning.** Nothing bounded how stale a log could get. She logs a start, then stops for four months (illness, a pregnancy, a lost phone, or losing interest), and everything stayed anchored to that one start: the app said "Day 127. Period." next to a fertile window from March and a most-likely date months in the past. Those are plainly false statements in an app whose whole thesis is saying only what it can honestly say. Not claiming an overdue period was the right instinct, but the failure it produced past a few days is worse than the one it avoided.
+
+The suppressed fertile window is the part that matters. The likeliest reasons for months of silence are pregnancy, illness, or having given up on the app, and a confidently rendered months-old fertile window is wrong in all three and actively harmful in the first two. So it is removed from the returned model rather than labelled, and no consumer can render one by forgetting to check a flag.
+
+The threshold is the model's own 80% interval and not a day count, because the engine already knows how sure it is: a regular history stops trusting itself about five days past the point estimate, an irregular one holds on for weeks. `stale` is a member of `CyclePhase` rather than a separate boolean so an exhaustive switch over the phases fails to compile until a consumer handles it, which is checked rather than assumed.
+
+**Consequences.** A sixth state the task 2 UI has to render, and it must read differently from the cold start: never having logged and having stopped logging are not the same thing. Resuming is automatic, because the new start becomes the anchor. Historical cycles are untouched, since a completed cycle is bounded by a real next start and never goes stale. The wording names only what the engine knows, never why, because start dates cannot distinguish being late from having missed a log from being pregnant.
+
 ## Confidence is scaled against what the model can attain
 
 **Decision.** The reported confidence is the product of two factors, each measured against a limit derived from the model: `maxWeightSum()` for how much data the recency weighting can ever hold, and `minPredictiveSd()` for how tight the priors can ever make the predictive spread.
+
+Both limits depend on the recency half life, so `fitCycleLength` records the half life it used on the posterior and `confidenceFor` takes it as a parameter rather than assuming the default. Freezing the two endpoints at module load looked harmless because `analyze` always uses the default, but `fitCycleLength` and `confidenceFor` are both public, and a fit at a half life of 3 saturates at a weight sum of about 4.85. Scored against the default's 9.17 it could never report more than about half the confidence its data had earned, and nothing in the returned number would have shown it.
 
 **Reasoning.** Both quantities are bounded, and the first version of the scale ignored that. The weight sum saturates near 9.2 and the predictive spread bottoms out near 2.9 days, so the old shaping constants capped the number near 0.63 while advertising a 0.95 ceiling. The top quarter of a 0 to 1 scale was unreachable by construction, which makes the number mean something other than what it says. Deriving the endpoints from the priors means they cannot drift out of step if the priors change.
 

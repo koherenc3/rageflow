@@ -82,6 +82,31 @@ describe('confidenceFor', () => {
     expect(confidenceFor(6, 4)).toBeGreaterThan(confidenceFor(2, 4));
     expect(confidenceFor(6, 5)).toBeLessThan(confidenceFor(6, 3));
   });
+
+  it('scales against the half life the fit actually used', () => {
+    // Both endpoints of the scale are functions of the recency half life, and
+    // `fitCycleLength` takes one. Measuring a short-half-life fit against the
+    // default's limits would report roughly half the confidence the data earned,
+    // with nothing in the number to show it.
+    for (const halfLife of [3, 6, 12]) {
+      const saturated = fitCycleLength(new Array(500).fill(29), halfLife);
+      expect(saturated.halfLife).toBe(halfLife);
+      expect(
+        confidenceFor(
+          saturated.weightSum,
+          saturated.predictive.standardDeviation,
+          saturated.halfLife
+        )
+      ).toBeGreaterThan(0.9);
+    }
+
+    // The bug this replaced: a half life of 3 saturates at a weight sum of about
+    // 4.85, so scoring it against the default's 9.17 halves the answer.
+    const short = fitCycleLength(new Array(500).fill(29), 3);
+    expect(confidenceFor(short.weightSum, short.predictive.standardDeviation)).toBeLessThan(
+      0.6 * confidenceFor(short.weightSum, short.predictive.standardDeviation, short.halfLife)
+    );
+  });
 });
 
 describe('confidence over a real history', () => {

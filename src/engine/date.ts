@@ -38,34 +38,38 @@ export function daysInMonth(year: number, month: number): number {
   return DAYS_IN_MONTH[month - 1] ?? 0;
 }
 
-/** True when `value` is a syntactically and calendrically valid `YYYY-MM-DD`. */
-export function isValidISODate(value: unknown): value is ISODate {
-  if (typeof value !== 'string') return false;
+/**
+ * The one place a date string is taken apart and checked.
+ *
+ * Both the predicate and the parser go through this, so validity and the fields
+ * come out of a single pass. `toDayNumber` is on the path of every comparison in
+ * the engine and those run in loops, so matching twice to answer the same
+ * question is worth avoiding.
+ */
+function calendarPartsOf(value: unknown): CalendarParts | undefined {
+  if (typeof value !== 'string') return undefined;
   const match = ISO_DATE_PATTERN.exec(value);
-  if (!match) return false;
+  if (!match) return undefined;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  if (month < 1 || month > 12) return false;
-  if (day < 1 || day > daysInMonth(year, month)) return false;
-  return true;
+  if (month < 1 || month > 12) return undefined;
+  if (day < 1 || day > daysInMonth(year, month)) return undefined;
+  return { year, month, day };
 }
 
-function assertValid(date: ISODate): void {
-  if (!isValidISODate(date)) {
+/** True when `value` is a syntactically and calendrically valid `YYYY-MM-DD`. */
+export function isValidISODate(value: unknown): value is ISODate {
+  return calendarPartsOf(value) !== undefined;
+}
+
+/** Split a `YYYY-MM-DD` string into its calendar fields. Throws on anything else. */
+export function parseDate(date: ISODate): CalendarParts {
+  const parts = calendarPartsOf(date);
+  if (parts === undefined) {
     throw new RangeError(`Not a valid YYYY-MM-DD calendar date: ${JSON.stringify(date)}`);
   }
-}
-
-/** Split a `YYYY-MM-DD` string into its calendar fields. */
-export function parseDate(date: ISODate): CalendarParts {
-  assertValid(date);
-  const match = ISO_DATE_PATTERN.exec(date) as RegExpExecArray;
-  return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    day: Number(match[3]),
-  };
+  return parts;
 }
 
 function pad(value: number, width: number): string {
@@ -78,9 +82,11 @@ export function formatDate(parts: CalendarParts): ISODate {
   if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
     throw new RangeError('Calendar parts must be integers');
   }
-  // Every field is range checked before it is padded. Padding a negative number
-  // would either drop the sign or produce a string the pattern rejects, and
-  // both of those turn a caller's mistake into a plausible looking date.
+  // Every field is range checked before it is padded, which is the whole of the
+  // validation: padding a negative number would either drop the sign or produce
+  // a string the pattern rejects, and both of those turn a caller's mistake into
+  // a plausible looking date. Re-checking the string afterwards would only ask
+  // the same three questions of the same three integers.
   if (year < 0 || year > 9999) {
     throw new RangeError(`Year out of supported range: ${year}`);
   }
@@ -90,9 +96,7 @@ export function formatDate(parts: CalendarParts): ISODate {
   if (day < 1 || day > daysInMonth(year, month)) {
     throw new RangeError(`Day out of supported range for ${year}-${month}: ${day}`);
   }
-  const formatted = `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}`;
-  assertValid(formatted);
-  return formatted;
+  return `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}`;
 }
 
 /**

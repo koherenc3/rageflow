@@ -14,11 +14,11 @@ Done.
 
 What the engine does, in three layers:
 
-| Layer           | File             | What it produces                                                                                                                                          |
-| --------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Cycle length | `cycleLength.ts` | Normal-Inverse-Gamma posterior over cycle length, recency weighted, giving a Student-t posterior predictive and 50%/80% credible intervals as date ranges |
-| 2. Phases       | `phases.ts`      | Menstrual, follicular, fertile, luteal, premenstrual for any date, plus estimated ovulation and fertile window from learned luteal and period lengths     |
-| 3. Calibration  | `calibration.ts` | Measured error and coverage from replaying the log, feeding back as an interval widening factor                                                           |
+| Layer           | File             | What it produces                                                                                                                                                                |
+| --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Cycle length | `cycleLength.ts` | Normal-Inverse-Gamma posterior over cycle length, recency weighted, giving a Student-t posterior predictive and 50%/80% credible intervals as date ranges                       |
+| 2. Phases       | `phases.ts`      | Menstrual, follicular, fertile, luteal, premenstrual for any date, plus a sixth `stale` state, estimated ovulation, and a fertile window from learned luteal and period lengths |
+| 3. Calibration  | `calibration.ts` | Measured error and coverage from replaying the log, feeding back as an interval widening factor                                                                                 |
 
 Cold start behaviour is enforced in the engine, not in the UI, so a population baseline can never be presented as a personal prediction:
 
@@ -29,6 +29,8 @@ Cold start behaviour is enforced in the engine, not in the UI, so a population b
 | 3 to 5            | `moderate` | Real predictions, intervals tightening                            |
 | 6+                | `high`     | Full confidence reporting                                         |
 
+Stopping is a state too, and a different one from never having started. Once today is past the far end of the prediction's 80% range, `currentPhase.phase` is `stale`, `prediction.isStale` is true, and `phases.isStale` is true with every window absent. See [[DECISIONS]] for why.
+
 ## Task 2: local storage, logging, and the prediction UI
 
 The first version she can actually use.
@@ -36,7 +38,7 @@ The first version she can actually use.
 - Local-first persistence. IndexedDB or localStorage behind a small repository interface, so storage can be swapped without touching the engine.
 - Logging: one button for "my period started today", a date picker for backfilling, and an optional "it ended" entry. Nothing else.
 - Editing and deleting entries, because she will typo a date.
-- The prediction view: current phase, next period as a range not a date, days until, confidence.
+- The prediction view: current phase, next period as a range not a date, days until, confidence. Including the stale state, which the engine already emits and which the UI must render as its own thing rather than as a phase.
 - The confirmation flow for suspected missed logs. The engine already emits the question; the UI has to ask it and act on the answer.
 - Clinical notes surfaced somewhere calm, not as an alarm.
 - The accuracy view: measured mean absolute error and observed coverage, shown honestly.

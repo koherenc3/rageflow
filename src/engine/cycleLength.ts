@@ -90,10 +90,12 @@ function predictiveFrom(
 }
 
 /** The untouched population prior, used when nothing has been logged. */
-export function priorPosterior(): CycleLengthPosterior {
+export function priorPosterior(halfLife: number = RECENCY_HALF_LIFE_CYCLES): CycleLengthPosterior {
+  if (halfLife <= 0) throw new RangeError(`Half life must be positive: ${halfLife}`);
   return {
     observationCount: 0,
     weightSum: 0,
+    halfLife,
     mu: PRIOR_MU0,
     kappa: PRIOR_KAPPA0,
     alpha: PRIOR_ALPHA0,
@@ -110,7 +112,7 @@ export function fitCycleLength(
   lengths: readonly number[],
   halfLife: number = RECENCY_HALF_LIFE_CYCLES
 ): CycleLengthPosterior {
-  if (lengths.length === 0) return priorPosterior();
+  if (lengths.length === 0) return priorPosterior(halfLife);
 
   const weights = recencyWeights(lengths.length, halfLife);
 
@@ -140,6 +142,7 @@ export function fitCycleLength(
   return {
     observationCount: lengths.length,
     weightSum,
+    halfLife,
     mu,
     kappa,
     alpha,

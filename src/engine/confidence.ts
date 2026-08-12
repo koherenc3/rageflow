@@ -3,19 +3,11 @@ import {
   COLD_START_MODERATE_MAX_CYCLES,
   CONFIDENCE_MAX,
   CONFIDENCE_SD_CEILING_DAYS,
+  RECENCY_HALF_LIFE_CYCLES,
 } from './constants';
 import { maxWeightSum, minPredictiveSd } from './cycleLength';
 import { clamp } from './stats';
 import type { ConfidenceTier } from './types';
-
-/**
- * The two endpoints the scale is measured against, both of them properties of
- * the model rather than knobs. Scaling against an unreachable ideal instead
- * would leave the top of the range permanently empty and make the number mean
- * something different from what it says.
- */
-const MAX_WEIGHT_SUM = maxWeightSum();
-const MIN_PREDICTIVE_SD = minPredictiveSd();
 
 /**
  * Cold start behaviour lives here, in the engine, so the UI cannot accidentally
@@ -42,6 +34,12 @@ export function confidenceTierFor(usedCycleCount: number): ConfidenceTier {
  * be" rather than an unreachable ideal. Only a long and very regular history
  * gets near the top; a cycle or two still lands well down the scale.
  *
+ * Both of those endpoints depend on the recency half life, so it is a parameter
+ * here and the caller passes the one the fit actually used (`posterior.halfLife`).
+ * Measuring a weight sum from a short half life against the default's ceiling
+ * would silently report about half the confidence the data has earned, and
+ * nothing in the returned number would show it.
+ *
  * The ceiling scales the result rather than truncating it. Clamping would put a
  * plateau at the top: past some point every history reports 0.95 and the number
  * stops answering the one question it exists to answer. Scaling keeps it moving
@@ -49,12 +47,17 @@ export function confidenceTierFor(usedCycleCount: number): ConfidenceTier {
  * an asymptote that a real history approaches and never quite reaches. Both of
  * the factors are already bounded to [0, 1], so the result cannot exceed it.
  */
-export function confidenceFor(weightSum: number, predictiveSd: number): number {
+export function confidenceFor(
+  weightSum: number,
+  predictiveSd: number,
+  halfLife: number = RECENCY_HALF_LIFE_CYCLES
+): number {
   if (weightSum <= 0) return 0;
-  const dataFactor = clamp(weightSum / MAX_WEIGHT_SUM, 0, 1);
+  const dataFactor = clamp(weightSum / maxWeightSum(halfLife), 0, 1);
   const spread = Number.isFinite(predictiveSd) ? predictiveSd : CONFIDENCE_SD_CEILING_DAYS;
   const precisionFactor = clamp(
-    (CONFIDENCE_SD_CEILING_DAYS - spread) / (CONFIDENCE_SD_CEILING_DAYS - MIN_PREDICTIVE_SD),
+    (CONFIDENCE_SD_CEILING_DAYS - spread) /
+      (CONFIDENCE_SD_CEILING_DAYS - minPredictiveSd(halfLife)),
     0,
     1
   );

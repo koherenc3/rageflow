@@ -75,6 +75,15 @@ export interface CycleLengthPosterior {
   observationCount: number;
   /** Sum of recency weights. The model's effective sample size. */
   weightSum: number;
+  /**
+   * Recency half life this fit used, in cycles.
+   *
+   * Carried on the posterior because `weightSum` is only interpretable against
+   * it: the attainable maximum is a function of the half life, so anything
+   * scaling against that maximum has to read the half life from the same fit
+   * rather than assume the default.
+   */
+  halfLife: number;
   mu: number;
   kappa: number;
   alpha: number;
@@ -124,6 +133,13 @@ export interface NextStartPrediction {
   confidenceTier: ConfidenceTier;
   /** False until at least one of her own cycles is in the fit. */
   personalized: boolean;
+  /**
+   * True when `today` is already past the end of `interval80`, so `pointDate`
+   * and both ranges are in the past and describe a period that did not arrive
+   * or did not get logged. `summary` says so rather than presenting a past date
+   * as what to expect next.
+   */
+  isStale: boolean;
   /** Plain sentence the UI can show verbatim. */
   summary: string;
 }
@@ -138,7 +154,17 @@ export interface LearnedLength {
   isPrior: boolean;
 }
 
-export type CyclePhase = 'menstrual' | 'follicular' | 'fertile' | 'luteal' | 'premenstrual';
+/**
+ * Where a day sits in the cycle.
+ *
+ * `stale` is not a phase of the cycle, it is the absence of one: the last logged
+ * start is further back than the engine's own 80% interval reaches, so there is
+ * no current cycle to place the day in. It is in this union rather than a
+ * separate flag so an exhaustive switch over the phases stops compiling until it
+ * is handled, and no consumer can render it as an ordinary phase by omission.
+ */
+export type CyclePhase =
+  'menstrual' | 'follicular' | 'fertile' | 'luteal' | 'premenstrual' | 'stale';
 
 export interface PhaseEstimate {
   date: ISODate;
@@ -155,11 +181,18 @@ export interface PhaseEstimate {
 export interface PhaseModel {
   lutealLength: LearnedLength;
   periodLength: LearnedLength;
-  /** Absent until there is a logged start to anchor to. */
+  /** Absent until there is a logged start to anchor to, and absent while stale. */
   estimatedOvulationDate?: ISODate;
   fertileWindow?: DateRange;
   premenstrualWindow?: DateRange;
   menstrualWindow?: DateRange;
+  /**
+   * True when the log stopped too long ago for these windows to describe a
+   * current cycle. Every window is absent in that case, deliberately: a months
+   * old fertile window presented as the current one is wrong if she has stopped
+   * logging and harmful if the reason is a pregnancy.
+   */
+  isStale: boolean;
   fertilityIsEstimateNotContraception: true;
 }
 
@@ -183,10 +216,12 @@ export interface CalibrationSummary {
   sampleCount: number;
   /** `NaN` with no records. */
   meanAbsoluteErrorDays: number;
+  /** `NaN` with no records. */
   medianAbsoluteErrorDays: number;
   /** Observed fraction of outcomes inside each nominal interval. `NaN` with no records. */
   coverage50: number;
   coverage80: number;
+  /** `NaN` with no records. */
   meanInterval80WidthDays: number;
   /** Multiplier the next prediction's intervals get. Always >= 1. */
   widenFactor: number;
