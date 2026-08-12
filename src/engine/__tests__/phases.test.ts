@@ -4,12 +4,13 @@ import {
   FERTILE_DAYS_BEFORE_OVULATION,
   LUTEAL_PRIOR_MEAN_DAYS,
   LUTEAL_PRIOR_SD_DAYS,
+  MAX_FITTABLE_PERIOD_LENGTH_DAYS,
   PERIOD_PRIOR_MEAN_DAYS,
   PERIOD_PRIOR_SD_DAYS,
   PREMENSTRUAL_WINDOW_DAYS,
 } from '../constants';
 import { addDays, diffDays } from '../date';
-import { deriveCycles } from '../cycles';
+import { deriveCycles, observedPeriodLengths } from '../cycles';
 import {
   buildPhaseModel,
   learnLength,
@@ -19,6 +20,7 @@ import {
   type PhaseInputs,
 } from '../phases';
 import { analyze, logFromStartDates } from '../index';
+import type { CycleLog } from '../types';
 
 function inputsFor(starts: readonly string[], predictedNextStart: string): PhaseInputs {
   const { cycles } = deriveCycles(logFromStartDates(starts));
@@ -86,6 +88,86 @@ describe('period length', () => {
     const learned = learnPeriodLength([7, 7, 6]);
     expect(learned.meanDays).toBeGreaterThan(PERIOD_PRIOR_MEAN_DAYS);
     expect(learned.isPrior).toBe(false);
+  });
+
+  it('barely moves on one end date, however wrong that one is', () => {
+    // The worst a single entry can do, since anything longer is out of the fit
+    // entirely. Even then it moves the estimate a fifth of the way, not most of
+    // the way, and the result is still a plausible period length.
+    const worst = learnPeriodLength([MAX_FITTABLE_PERIOD_LENGTH_DAYS]);
+    expect(worst.meanDays - PERIOD_PRIOR_MEAN_DAYS).toBeLessThan(
+      (MAX_FITTABLE_PERIOD_LENGTH_DAYS - PERIOD_PRIOR_MEAN_DAYS) / 4
+    );
+    expect(worst.meanDays).toBeLessThan(8);
+  });
+
+  it('still converges on a genuinely longer period given consistent entries', () => {
+    // Someone whose period really does run 8 days has to be able to teach the
+    // engine that. Damping one entry must not mean ignoring twenty.
+    const counts = [1, 4, 8, 16, 32, 64];
+    const means = counts.map((count) => learnPeriodLength(new Array(count).fill(8)).meanDays);
+    for (let i = 1; i < means.length; i += 1) {
+      expect(means[i] as number).toBeGreaterThan(means[i - 1] as number);
+      expect(means[i] as number).toBeLessThan(8);
+    }
+    // A year of consistent entries has clearly moved it off the 5 day prior.
+    expect(learnPeriodLength(new Array(12).fill(8)).meanDays).toBeGreaterThan(7);
+    expect(learnPeriodLength(new Array(12).fill(7)).meanDays).toBeGreaterThan(6.4);
+    // And it does get all the way there in the end.
+    expect(learnPeriodLength(new Array(400).fill(8)).meanDays).toBeCloseTo(8, 1);
+    expect(learnPeriodLength(new Array(400).fill(7)).meanDays).toBeCloseTo(7, 1);
+  });
+});
+
+describe('one mistyped end date does not redefine what the app calls a period', () => {
+  // She starts on 2024-02-26, means to log the end as 2024-03-01 and types
+  // 2024-03-11 instead. Fifteen days is inside the fittable range, so nothing
+  // upstream catches it: the only thing standing between that typo and a
+  // rewritten phase model is how much weight one observation carries.
+  const log: CycleLog = {
+    version: 1,
+    entries: [
+      { date: '2024-01-01', kind: 'period-start' },
+      { date: '2024-01-29', kind: 'period-start' },
+      { date: '2024-02-26', kind: 'period-start' },
+      { date: '2024-03-11', kind: 'period-end' },
+    ],
+  };
+  const { cycles } = deriveCycles(log);
+  const observed = observedPeriodLengths(cycles);
+  const inputs: PhaseInputs = {
+    cycles,
+    predictedNextStart: '2024-03-25',
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(observed),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+
+  it('takes the typo into the fit rather than silently dropping it', () => {
+    // The backstop is not what saves this case, so the case is a real test of
+    // the weighting rather than of the bound.
+    expect(observed).toEqual([15]);
+    expect(cycles[2]?.endDate).toBe('2024-03-11');
+  });
+
+  it('leaves the learned period length inside the normal range', () => {
+    expect(inputs.periodLength.meanDays).toBeLessThan(8);
+  });
+
+  it('still calls the estimated fertile window fertile, not Period.', () => {
+    // Without the damping the menstrual window ran to day 12 and swallowed the
+    // front of the fertile window, which starts on 2024-03-07.
+    for (const date of ['2024-03-07', '2024-03-08', '2024-03-12', '2024-03-13']) {
+      const estimate = phaseForDate(inputs, date);
+      expect(estimate?.phase).toBe('fertile');
+      expect(estimate?.summary).not.toMatch(/Period\./);
+    }
+  });
+
+  it('keeps the follicular gap between the period and the fertile window', () => {
+    expect(phaseForDate(inputs, '2024-03-04')?.phase).toBe('follicular');
+    expect(phaseForDate(inputs, '2024-03-06')?.phase).toBe('follicular');
   });
 });
 

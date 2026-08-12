@@ -97,19 +97,39 @@ export const LUTEAL_OBSERVATION_SD_DAYS = 1.5;
 export const PERIOD_PRIOR_MEAN_DAYS = 5;
 export const PERIOD_PRIOR_SD_DAYS = 1.5;
 
-/** Assumed noise on a single observed period length derived from a logged end date. */
-export const PERIOD_OBSERVATION_SD_DAYS = 1;
+/**
+ * Assumed noise on a single observed period length derived from a logged end
+ * date: 3 days, which is deliberately twice the prior's own spread.
+ *
+ * An end date is one hand-typed self-report, and both of its error modes are
+ * large. The day she calls the end is genuinely fuzzy (spotting or a light last
+ * day), and a mistyped digit moves the date by a week or more. So the honest
+ * noise on one entry is days, not the single day this used to assume.
+ *
+ * The number is picked from the weighting it produces rather than from the case
+ * that exposed it. Prior precision is `1 / 1.5^2 = 0.444` and one observation
+ * contributes `1 / 3^2 = 0.111`, a quarter of that, so a single end date moves
+ * the learned length exactly one fifth of the way towards what she typed. Four
+ * consistent entries match the prior's weight, a dozen outweigh it three to one,
+ * and the estimate still converges on the truth for someone whose period really
+ * does run 7 or 8 days. Repeated consistent evidence moves it; one entry cannot.
+ */
+export const PERIOD_OBSERVATION_SD_DAYS = 3;
 
 /**
  * A logged bleed longer than this is not fitted, the same way a gap that looks
  * like two cycles is not fitted.
  *
  * A bleed of more than about two weeks is outside anything the 5 day prior can
- * sensibly absorb, and because the observation noise is only a day, one such
- * value drags the learned period length most of the way to it and turns the
- * first half of the cycle into a reported menstrual window. Fifteen days sits
- * clear of a genuinely long period and well short of a mistyped end date. The
- * entry itself is kept and still shown; only the fit ignores it.
+ * sensibly absorb, so it is not evidence about her period length at all and
+ * should not be averaged in however gently. Fifteen days sits clear of a
+ * genuinely long period and well short of a mistyped end date. The entry itself
+ * is kept and still shown; only the fit ignores it.
+ *
+ * This is the backstop, not the defence. What stops any one hand-typed end date
+ * from redefining what the app calls menstruation is
+ * {@link PERIOD_OBSERVATION_SD_DAYS}, which is why that value is set from the
+ * weight a single entry should carry rather than from where this bound sits.
  */
 export const MAX_FITTABLE_PERIOD_LENGTH_DAYS = 15;
 
@@ -167,7 +187,9 @@ export const COLD_START_MODERATE_MAX_CYCLES = 5;
  * nothing useful to say about when the next period is due.
  *
  * The ceiling is 0.95 and not 1 because no amount of history makes a cycle
- * certain. It is reachable: a long, extremely regular history hits it.
+ * certain. It scales the product rather than capping it, so it is an asymptote:
+ * every extra cycle and every tighter interval still moves the number, and a
+ * real history gets close to 0.95 without ever landing on it.
  */
 export const CONFIDENCE_SD_CEILING_DAYS = 10;
 export const CONFIDENCE_MAX = 0.95;

@@ -41,6 +41,13 @@ export function confidenceTierFor(usedCycleCount: number): ConfidenceTier {
  * as the recency weighting can ever hold" and "as tight as these priors can ever
  * be" rather than an unreachable ideal. Only a long and very regular history
  * gets near the top; a cycle or two still lands well down the scale.
+ *
+ * The ceiling scales the result rather than truncating it. Clamping would put a
+ * plateau at the top: past some point every history reports 0.95 and the number
+ * stops answering the one question it exists to answer. Scaling keeps it moving
+ * with every extra cycle and every tighter interval, at the price of 0.95 being
+ * an asymptote that a real history approaches and never quite reaches. Both of
+ * the factors are already bounded to [0, 1], so the result cannot exceed it.
  */
 export function confidenceFor(weightSum: number, predictiveSd: number): number {
   if (weightSum <= 0) return 0;
@@ -51,7 +58,7 @@ export function confidenceFor(weightSum: number, predictiveSd: number): number {
     0,
     1
   );
-  return clamp(dataFactor * precisionFactor, 0, CONFIDENCE_MAX);
+  return CONFIDENCE_MAX * dataFactor * precisionFactor;
 }
 
 function cycleNoun(count: number): string {

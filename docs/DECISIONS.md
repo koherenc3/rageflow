@@ -78,13 +78,13 @@ Conjugacy also means the update is closed form: no sampler, no convergence to ch
 
 **Consequences.** Two tuned constants (`SKIP_MEDIAN_MULTIPLE`, `SKIP_PREDICTIVE_SD_THRESHOLD`) and a minimum history before detection turns on, all documented in `src/engine/constants.ts`. False positives are possible for genuinely very irregular cycles, which is why the flag is a question rather than a silent deletion.
 
-## Implausible bleed lengths are excluded from the fit, not from her history
+## One logged end date is weak evidence about period length
 
-**Decision.** A logged end date more than `MAX_FITTABLE_PERIOD_LENGTH_DAYS` after the start is kept on the derived cycle and shown, but left out of the period-length fit.
+**Decision.** Two things, in that order. `PERIOD_OBSERVATION_SD_DAYS` is 3, twice the prior's own 1.5 day spread, so a single logged end date moves the learned period length one fifth of the way towards what she typed. On top of that, an end date more than `MAX_FITTABLE_PERIOD_LENGTH_DAYS` after the start is kept on the derived cycle and shown, but left out of the fit entirely.
 
-**Reasoning.** The same argument as skip detection, one layer down. The period-length prior is 5 days with a 1.5 day spread and the assumed observation noise is a single day, so one 22 day bleed drags the learned length to about 19 and the app starts calling the first two thirds of the cycle menstruation. She will mistype an end date eventually, and a typo should not redefine what the app means by a period.
+**Reasoning.** An end date is one hand-typed self-report, and the first version trusted it about 2.25 to 1 over the population prior, which is the wrong posture for a value tapped in on a phone. Both of its error modes are multi-day: the day she calls the end is genuinely fuzzy, and a mistyped digit moves the date by a week. At the old weighting one 15 day entry pulled the learned length to 11.9, `windowsFor` rounded that to a 12 day menstrual window, and because `classify` tests menstrual before fertile the app reported "Period." across the front of its own estimated fertile window. The bound alone did not fix that, it only moved it below the threshold, so the weighting is the fix and the bound is the backstop for values that are not evidence about her period at all.
 
-**Consequences.** A genuinely very long bleed is not learned from either, which is the right trade when the alternative is a silently broken phase model. The exclusion lives in `observedPeriodLengths`, so nothing rewrites or hides what she typed.
+**Consequences.** Learned period length now moves only on repeated consistent evidence: four entries match the prior's weight, twelve outweigh it three to one, and someone whose period really runs 7 or 8 days still converges there. A genuinely very long bleed is still not learned from, which is the right trade when the alternative is a silently broken phase model. The exclusion lives in `observedPeriodLengths`, so nothing rewrites or hides what she typed. `classify` deliberately still tests menstrual first: if she is actually bleeding, that is what the day is.
 
 ## Confidence is scaled against what the model can attain
 
@@ -92,7 +92,9 @@ Conjugacy also means the update is closed form: no sampler, no convergence to ch
 
 **Reasoning.** Both quantities are bounded, and the first version of the scale ignored that. The weight sum saturates near 9.2 and the predictive spread bottoms out near 2.9 days, so the old shaping constants capped the number near 0.63 while advertising a 0.95 ceiling. The top quarter of a 0 to 1 scale was unreachable by construction, which makes the number mean something other than what it says. Deriving the endpoints from the priors means they cannot drift out of step if the priors change.
 
-**Consequences.** The ceiling is now reachable, and only by a long and very regular history: five years of cycles varying by about a day hit it, two years reach about 0.91, and one or two cycles report under 0.25. `src/engine/__tests__/confidence.test.ts` pins both ends so the mismatch cannot come back.
+The ceiling scales that product rather than capping it. Clamping made the top of the scale a plateau: past roughly two and a half years of regular cycles every history reported exactly 0.95 and the number stopped responding to the extra data that earned it, which is the one thing it exists to communicate.
+
+**Consequences.** 0.95 is an asymptote, approached and never quite attained by a real history, and the number moves with every extra cycle and every tighter interval. Two years of cycles varying by about a day reports about 0.87, five years about 0.93, and one or two cycles report under 0.15. `src/engine/__tests__/confidence.test.ts` pins the floor and pins strict monotonicity across nine years of history, so neither the old mismatch nor a new plateau can come back.
 
 ## Calibration is replayed, not stored
 
