@@ -137,7 +137,7 @@ export interface NextStartEstimate {
   /**
    * Last day this estimate still describes a current cycle. Past it the log has
    * gone quiet for longer than the model can account for. See
-   * `STALE_PREDICTIVE_QUANTILE` and `STALE_MIN_MISSED_CYCLES`.
+   * `STALE_PREDICTIVE_QUANTILE` and `STALE_MIN_ELAPSED_CYCLES`.
    */
   validThrough: ISODate;
   /** Multiplier applied to the raw intervals by calibration. 1 when untouched. */
@@ -160,8 +160,16 @@ interface NextStartPredictionCommon {
   summary: string;
 }
 
-/** A prediction that still describes a period that has not happened yet. */
+/**
+ * A prediction that still describes a period that has not happened yet.
+ *
+ * "Not yet" is measured by its own 80% interval rather than by the point date.
+ * A period arriving a day or two after the most likely date is what the interval
+ * is for, and going quiet the moment the point date passes would throw away the
+ * range the engine went to the trouble of computing.
+ */
 export interface CurrentNextStartPrediction extends NextStartPredictionCommon {
+  isLate: false;
   isStale: false;
   pointDate: ISODate;
   interval50: CredibleInterval;
@@ -169,22 +177,54 @@ export interface CurrentNextStartPrediction extends NextStartPredictionCommon {
 }
 
 /**
- * A prediction whose period did not arrive, or arrived and was not logged.
+ * A prediction the calendar has outlived: today is past the far end of its own
+ * 80% interval and nothing has been logged since.
+ *
+ * The date the engine named survives as `expectedDate`, which is named for the
+ * tense it is now in, and both intervals are dropped. Every day in them is in
+ * the past, so a range offered as when the period is due would be a plain false
+ * statement, while the date that did not happen is still worth reporting.
+ */
+export interface LateNextStartPrediction extends NextStartPredictionCommon {
+  isLate: true;
+  isStale: false;
+  /** A late prediction is always anchored to a real logged start. */
+  lastStartDate: ISODate;
+  /** The date the period was expected. Always in the past here. */
+  expectedDate: ISODate;
+  /** Days from `expectedDate` to today. Always at least one. */
+  daysLate: number;
+}
+
+/**
+ * A prediction whose period did not arrive, or arrived and was not logged, for
+ * longer than the model can account for.
  *
  * The dates are gone rather than flagged. Every one of them is in the past, so
  * `pointDate` bound to "next period" would render a date from months ago, and a
  * boolean beside it only prevents that for a consumer who remembers to read the
- * boolean. Discriminating the union on `isStale` means the compiler stops anyone
- * who does not.
+ * boolean. Discriminating the union on `isStale` and `isLate` means the compiler
+ * stops anyone who does not.
  */
 export interface StaleNextStartPrediction extends NextStartPredictionCommon {
+  isLate: false;
   isStale: true;
   /** The stale prediction is always anchored to a real logged start. */
   lastStartDate: ISODate;
 }
 
-/** The prediction for the next period start. */
-export type NextStartPrediction = CurrentNextStartPrediction | StaleNextStartPrediction;
+/**
+ * The prediction for the next period start.
+ *
+ * `isLate` is on every variant rather than only on the one it is true for, so a
+ * consumer reads the state of the log off the prediction itself instead of
+ * pairing it with `PhaseModel.isLate` by convention. The two are drawn at
+ * different points on purpose and cannot contradict each other: the phase model
+ * is late from the predicted day, the prediction only once the whole 80% range
+ * has run out, so a late prediction always sits inside a late phase model.
+ */
+export type NextStartPrediction =
+  CurrentNextStartPrediction | LateNextStartPrediction | StaleNextStartPrediction;
 
 /** A learned scalar with a Gaussian prior. */
 export interface LearnedLength {
@@ -226,8 +266,10 @@ export interface PhaseEstimate {
    */
   dayOfCycle?: number;
   /**
-   * Days past the predicted start, 0 on the predicted day itself. Present only
-   * when `phase` is `late`.
+   * Days from the predicted start to today, 0 on the predicted day itself.
+   * Present only when `phase` is `late`. It counts to today and not to `date`
+   * even when the two differ, because being late is a state of the log rather
+   * than a property of the day being asked about.
    */
   daysLate?: number;
   confidence: number;
@@ -244,7 +286,11 @@ export interface PhaseModel {
   estimatedOvulationDate?: ISODate;
   fertileWindow?: DateRange;
   premenstrualWindow?: DateRange;
-  /** Anchored to the logged start rather than to the prediction, so it survives `late`. */
+  /**
+   * Anchored to the logged start rather than to the prediction, so it survives
+   * both `late` and `stale`. It describes a bleed she logged the start of, which
+   * stays true however long the silence after it runs.
+   */
   menstrualWindow?: DateRange;
   /**
    * True when the predicted start has passed with nothing logged since. The
@@ -257,9 +303,10 @@ export interface PhaseModel {
   daysLate?: number;
   /**
    * True when the log stopped too long ago for these windows to describe a
-   * current cycle. Every window is absent in that case, deliberately: a months
-   * old fertile window presented as the current one is wrong if she has stopped
-   * logging and harmful if the reason is a pregnancy.
+   * current cycle. Every predicted window is absent in that case, deliberately:
+   * a months old fertile window presented as the current one is wrong if she has
+   * stopped logging and harmful if the reason is a pregnancy. What is left is
+   * `menstrualWindow`, which is a logged fact rather than a prediction.
    */
   isStale: boolean;
   fertilityIsEstimateNotContraception: true;

@@ -38,7 +38,6 @@ describe('gradePrediction', () => {
     today: '2024-05-01',
     posterior,
     usedCycleCount: 4,
-    loggedStartCount: 5,
   });
 
   it('records the signed error, positive when she was late', () => {
@@ -224,7 +223,6 @@ describe('buildCalibration', () => {
       today: '2024-09-10',
       posterior: analysis.posterior,
       usedCycleCount: analysis.usedCycleCount,
-      loggedStartCount: analysis.cycles.length,
     });
     expect(current(analysis.prediction).interval80.widthDays).toBeGreaterThan(
       unwidened.interval80.widthDays

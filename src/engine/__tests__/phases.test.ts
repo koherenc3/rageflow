@@ -288,13 +288,39 @@ describe('a period that is late', () => {
   });
 
   it('is a statement about today and not about any date being asked about', () => {
-    // The month-calendar case. Today is late, so every other day the calendar
-    // asks about still gets its ordinary phase.
+    // The month-calendar case. Today is late, so every day before the predicted
+    // start still gets its ordinary phase.
     const inputs = on('2024-03-31');
     expect(phaseForDate(inputs, '2024-03-31')?.phase).toBe('late');
     expect(phaseForDate(inputs, '2024-03-12')?.phase).toBe('fertile');
     expect(phaseForDate(inputs, '2024-02-27')?.phase).toBe('menstrual');
     expect(phaseForDate(inputs, '2024-01-16')?.phase).toBe('fertile');
+  });
+
+  it('stops claiming the predicted bleed once it has not arrived', () => {
+    // The engine predicted a period running 2024-03-25 to 2024-03-29 and then
+    // watched nothing get logged. Painting those five days on a calendar as a
+    // period contradicts the same model's report on today, and it claims a
+    // bleed the engine never observed.
+    const inputs = on('2024-03-31');
+    for (const date of ['2024-03-25', '2024-03-26', '2024-03-29']) {
+      const estimate = phaseForDate(inputs, date);
+      expect(estimate?.phase).toBe('late');
+      expect(estimate?.summary).not.toMatch(/Period\./);
+      // The count is about today, which is what being late is a property of.
+      expect(estimate?.daysLate).toBe(6);
+    }
+    // Past that it still cannot place a day at all, because the cycle it would
+    // belong to has not started.
+    expect(phaseForDate(inputs, '2024-03-30')).toBeUndefined();
+  });
+
+  it('claims it again the moment the period is only due rather than overdue', () => {
+    // The day before the estimate nothing has been contradicted yet, so a
+    // forward-looking question about the predicted bleed still gets an answer.
+    const inputs = on('2024-03-24');
+    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-29')?.phase).toBe('menstrual');
   });
 
   it('never calls a completed cycle late', () => {
@@ -335,7 +361,11 @@ describe('a log that has gone stale', () => {
     expect(model.fertileWindow).toBeUndefined();
     expect(model.estimatedOvulationDate).toBeUndefined();
     expect(model.premenstrualWindow).toBeUndefined();
-    expect(model.menstrualWindow).toBeUndefined();
+    // The bleed is indexed forward from a start she really logged rather than
+    // backward from a predicted end, so it survives here exactly as it does
+    // while late, and `phaseForDate` reports those same days as menstrual.
+    expect(model.menstrualWindow?.start).toBe('2024-02-26');
+    expect(phaseForDate(on('2024-08-01'), '2024-02-27')?.phase).toBe('menstrual');
     // The learned parameters are still facts about her history, so they stay.
     expect(model.periodLength.meanDays).toBe(PERIOD_PRIOR_MEAN_DAYS);
   });

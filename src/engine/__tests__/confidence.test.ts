@@ -7,8 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { confidenceFor, confidenceTierFor } from '../confidence';
-import { fitCycleLength, maxWeightSum, minPredictiveSd } from '../cycleLength';
+import { coldStartMessage, confidenceFor, confidenceTierFor } from '../confidence';
+import { fitCycleLength, maxWeightSum, minPredictiveSd, priorPosterior } from '../cycleLength';
 import { analyze, logFromStartDates } from '../index';
 import { CONFIDENCE_MAX, CONFIDENCE_SD_CEILING_DAYS } from '../constants';
 import { generateCycleLengths, startDatesFromLengths } from '../testing/synthetic';
@@ -70,11 +70,38 @@ describe('confidenceFor', () => {
     }
   });
 
-  it('is zero without data and zero once the spread is useless', () => {
+  it('is zero without data, and only without data', () => {
+    // Zero is reserved for having nothing to fit. A history of genuinely erratic
+    // cycles has earned a very low number rather than the number an empty log
+    // gets, and a UI reading them off the same scale has to be able to tell the
+    // two apart.
     expect(confidenceFor(0, 3)).toBe(0);
     expect(confidenceFor(-1, 3)).toBe(0);
-    expect(confidenceFor(5, CONFIDENCE_SD_CEILING_DAYS)).toBe(0);
-    expect(confidenceFor(5, Number.POSITIVE_INFINITY)).toBe(0);
+    for (const spread of [CONFIDENCE_SD_CEILING_DAYS, 20, 100, Number.POSITIVE_INFINITY]) {
+      expect(confidenceFor(5, spread)).toBeGreaterThan(0);
+      expect(confidenceFor(5, spread)).toBeLessThan(0.05);
+    }
+  });
+
+  it('keeps falling past the point where the spread is useless', () => {
+    // The floor is an asymptote and not a plateau, the same way the ceiling is.
+    const spreads = [CONFIDENCE_SD_CEILING_DAYS, 12, 16, 24, 40];
+    const values = spreads.map((spread) => confidenceFor(5, spread));
+    for (let i = 1; i < values.length; i += 1) {
+      expect(values[i] as number).toBeLessThan(values[i - 1] as number);
+      expect(values[i] as number).toBeGreaterThan(0);
+    }
+  });
+
+  it('leaves the useful part of the scale to the ramp', () => {
+    // The tail only takes over where the ramp has all but run out, so every fit
+    // worth reporting on reads exactly as it did before there was a floor.
+    const ramp = (spread: number): number =>
+      (CONFIDENCE_MAX * (CONFIDENCE_SD_CEILING_DAYS - spread)) /
+      (CONFIDENCE_SD_CEILING_DAYS - minPredictiveSd());
+    for (const spread of [3, 4, 5, 6, 7, 8, 9]) {
+      expect(confidenceFor(maxWeightSum(), spread)).toBeCloseTo(ramp(spread), 10);
+    }
   });
 
   it('rises with data and falls with spread', () => {
@@ -134,6 +161,22 @@ describe('confidence over a real history', () => {
     expect(variable.confidence).toBeLessThan(0.7);
   });
 
+  it('reads as low rather than as empty for years of erratic cycles', () => {
+    // The pairing this exists to prevent: a `high` tier and a message about
+    // having enough history, next to a confidence that says the engine knows
+    // nothing. Two of those three are correct. The number is genuinely low
+    // because the range genuinely is wide, so the wording is what has to give.
+    const erratic = analyzeLengths(
+      generateCycleLengths({ count: 60, meanDays: 31, sdDays: 15, seed: 21 })
+    );
+    expect(erratic.confidenceTier).toBe('high');
+    expect(erratic.confidence).toBeLessThan(0.1);
+    expect(erratic.confidence).toBeGreaterThan(0);
+    expect(erratic.coldStartMessage).toMatch(/plenty of history/i);
+    expect(erratic.coldStartMessage).toMatch(/range stays wide/i);
+    expect(erratic.coldStartMessage).not.toMatch(/confidence properly/i);
+  });
+
   it('leaves the cold start tiers alone', () => {
     expect([0, 1, 2, 3, 6].map(confidenceTierFor)).toEqual([
       'none',
@@ -142,5 +185,39 @@ describe('confidence over a real history', () => {
       'moderate',
       'high',
     ]);
+  });
+});
+
+describe('coldStartMessage', () => {
+  it('does not call a wide range trustworthy just because there is a lot of it', () => {
+    // Same volume, same tier, different spread. The tier stays volume-driven,
+    // which is deliberate, so the sentence is where the spread has to show up.
+    const tight = coldStartMessage(24, 25, 3);
+    const wide = coldStartMessage(24, 25, 12);
+    expect(tight).toMatch(/confidence properly/i);
+    expect(wide).toMatch(/plenty of history/i);
+    expect(wide).toMatch(/range stays wide/i);
+    expect(wide).not.toMatch(/confidence properly/i);
+    expect(wide).toMatch(/24 cycles/);
+  });
+
+  it('measures wide against the population baseline rather than a tuned number', () => {
+    // A fit no tighter than the untouched prior has bought no precision at all,
+    // however many cycles are behind it.
+    const baseline = priorPosterior().predictive.standardDeviation;
+    expect(coldStartMessage(24, 25, baseline)).toMatch(/range stays wide/i);
+    expect(coldStartMessage(24, 25, baseline - 0.01)).toMatch(/confidence properly/i);
+    expect(coldStartMessage(24, 25, Number.POSITIVE_INFINITY)).toMatch(/range stays wide/i);
+  });
+
+  it('leaves the thinner tiers to volume alone', () => {
+    expect(coldStartMessage(0, 0, 12)).toMatch(/no periods logged yet/i);
+    expect(coldStartMessage(0, 1, 12)).toMatch(/only one period logged/i);
+    expect(coldStartMessage(2, 3, 12)).toMatch(/deliberately wide/i);
+    expect(coldStartMessage(4, 5, 12)).toMatch(/still tightening/i);
+  });
+
+  it('keeps its volume-only wording when no spread is supplied', () => {
+    expect(coldStartMessage(24, 25)).toMatch(/confidence properly/i);
   });
 });

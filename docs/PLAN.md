@@ -31,12 +31,12 @@ Cold start behaviour is enforced in the engine, not in the UI, so a population b
 
 The original spec had five phases and that was wrong twice over, so there are seven. A period that has not arrived and a log that has stopped are both states the app has to be able to report, and neither is a phase of a cycle:
 
-| State   | When                                                                              | What the engine does                                                                                                 |
-| ------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `late`  | Today is on or past the predicted start, nothing logged                           | Reports the days late, keeps the day of cycle, drops the ovulation estimate and the fertile and premenstrual windows |
-| `stale` | Today is past both the 99% predictive quantile and two expected cycles of silence | Reports no cycle at all, drops every window, and `prediction` hands back no dates                                    |
+| State   | When                                                                                    | What the engine does                                                                                                 |
+| ------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `late`  | Today is on or past the predicted start, nothing logged                                 | Reports the days late, keeps the day of cycle, drops the ovulation estimate and the fertile and premenstrual windows |
+| `stale` | Today is past both the 99% predictive quantile and two elapsed cycle lengths of silence | Reports no cycle at all, drops every predicted window, and `prediction` hands back no dates                          |
 
-Both are read off today, never off a date being asked about, so a month calendar drawn from `phaseForDate` still gets ordinary phases for its other days. Stopping is also a different state from never having started, and the two read differently. See [[DECISIONS]] for why.
+Both are read off today, never off a date being asked about, so a month calendar drawn from `phaseForDate` still gets ordinary phases for the days before the predicted start. What the two states do reach is the bleed the engine predicted and then watched not arrive, which neither of them will claim. The bleed she logged the start of survives both, since it is a fact rather than a prediction. Stopping is also a different state from never having started, and the two read differently. See [[DECISIONS]] for why.
 
 ## Task 2: local storage, logging, and the prediction UI
 
@@ -45,7 +45,7 @@ The first version she can actually use.
 - Local-first persistence. IndexedDB or localStorage behind a small repository interface, so storage can be swapped without touching the engine.
 - Logging: one button for "my period started today", a date picker for backfilling, and an optional "it ended" entry. Nothing else.
 - Editing and deleting entries, because she will typo a date.
-- The prediction view: current phase, next period as a range not a date, days until, confidence. Including the `late` and `stale` states, which the engine already emits and which the UI must render as their own thing rather than as phases. A stale prediction has no `pointDate` and no intervals to render, by construction.
+- The prediction view: current phase, next period as a range not a date, days until, confidence. Including the `late` and `stale` states, which the engine already emits and which the UI must render as their own thing rather than as phases. A late prediction has no intervals to render and a stale one has no dates at all, by construction.
 - The confirmation flow for suspected missed logs. The engine already emits the question; the UI has to ask it and act on the answer.
 - Clinical notes surfaced somewhere calm, not as an alarm.
 - The accuracy view: measured mean absolute error and observed coverage, shown honestly.

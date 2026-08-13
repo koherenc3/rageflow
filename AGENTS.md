@@ -33,7 +33,9 @@ npm run format       # prettier --write
 
 ### 1. Privacy: this repo is public and holds zero health data
 
-No real cycle data. No realistic-looking cycle data. No screenshots containing dates that could be someone's real log. Every fixture in the test suite comes from a seeded synthetic generator in `src/engine/testing/synthetic.ts`, and that is the only place cycle numbers may come from.
+No real cycle data. No realistic-looking cycle data. No screenshots containing dates that could be someone's real log. Ever, anywhere.
+
+Every generated cycle history and every statistical fixture comes from the seeded synthetic generator in `src/engine/testing/synthetic.ts`, and that is the only place those numbers may come from. Hand-written literal dates are allowed in deterministic unit tests, where the point is arithmetic you can check by hand, and they must stay obviously synthetic: `2024-01-01` plus exact 28 day steps, not a plausible log. See `docs/TESTING.md`.
 
 `.gitignore` excludes `.env*` and `*.rageflow.json` (the data export format). Do not commit anything matching those, and do not add an exception for them.
 

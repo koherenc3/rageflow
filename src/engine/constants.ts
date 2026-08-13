@@ -161,10 +161,13 @@ export const PREMENSTRUAL_WINDOW_DAYS = 5;
  * ever push the verdict later than the floor, never earlier, so a very variable
  * history holds on longer and a regular one still gets a month of grace.
  *
- * The gap between the predicted start and this bound is the `late` state.
+ * The floor counts elapsed cycle lengths from the last logged start, not missed
+ * periods. Two elapsed cycles is one period that never arrived plus a second
+ * that was also due, so on a regular 28 day history the bound falls 56 days
+ * after the last start and the `late` state runs for the four weeks before it.
  */
 export const STALE_PREDICTIVE_QUANTILE = 0.99;
-export const STALE_MIN_MISSED_CYCLES = 2;
+export const STALE_MIN_ELAPSED_CYCLES = 2;
 
 /* ------------------------------------------------------------------ *
  * Layer 3: calibration
@@ -212,6 +215,16 @@ export const COLD_START_MODERATE_MAX_CYCLES = 5;
  * certain. It scales the product rather than capping it, so it is an asymptote:
  * every extra cycle and every tighter interval still moves the number, and a
  * real history gets close to 0.95 without ever landing on it.
+ *
+ * The bottom of the precision factor is an asymptote for the same reason. A
+ * spread at the ceiling leaves it at `CONFIDENCE_PRECISION_TAIL` rather than at
+ * zero, and past the ceiling it keeps decaying geometrically without ever
+ * arriving. Years of genuinely erratic cycles should report a very low number,
+ * because that is the truth, but not the same number as a log with nothing in
+ * it: those are different states and the scale has to keep them apart. Two
+ * hundredths at the ceiling is low enough to read as "no useful estimate" and
+ * still leaves the number responding to the data behind it.
  */
 export const CONFIDENCE_SD_CEILING_DAYS = 10;
 export const CONFIDENCE_MAX = 0.95;
+export const CONFIDENCE_PRECISION_TAIL = 0.02;

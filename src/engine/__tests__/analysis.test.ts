@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { analyze, logFromStartDates } from '../index';
 import { addDays, compareDates, todayLocal } from '../date';
-import { current } from './support';
+import { current, late } from './support';
 import type { CycleLog } from '../types';
 
 const REGULAR_STARTS = [
@@ -125,26 +125,84 @@ function firstStaleGap(starts: readonly string[]): number {
 }
 
 describe('a period that is running late', () => {
-  // Predicted start 2024-06-17 for this history, and the staleness bound falls
-  // on 2024-07-15, two expected cycles past the last logged start.
+  // Predicted start 2024-06-17 for this history, its 80% range ends 2024-06-22,
+  // and the staleness bound falls on 2024-07-15, two expected cycle lengths past
+  // the last logged start.
   it('does not give up on itself a few days past the prediction', () => {
     // The moment she is most likely to open the app is the moment it used to go
     // blank: the 80% range ended on 2024-06-22, so a six day delay tipped the
     // whole output into the stale state.
-    const late = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
-    expect(late.prediction.isStale).toBe(false);
-    expect(late.phases.isStale).toBe(false);
-    expect(late.currentPhase?.phase).toBe('late');
-    expect(late.currentPhase?.daysLate).toBe(6);
-    expect(current(late.prediction).interval80.range.end).toBe('2024-06-22');
+    const overdue = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
+    expect(overdue.prediction.isStale).toBe(false);
+    expect(overdue.phases.isStale).toBe(false);
+    expect(overdue.currentPhase?.phase).toBe('late');
+    expect(overdue.currentPhase?.daysLate).toBe(6);
+  });
+
+  it('still names a date while its own 80% range has days left in it', () => {
+    // Late by the phase model, which counts from the point date, and still a
+    // current prediction, which counts from the far end of the range. A period
+    // arriving a day or two after the most likely date is the ordinary case the
+    // interval exists to describe, so the interval is what decides.
+    const day = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-20' });
+    expect(day.phases.isLate).toBe(true);
+    expect(day.prediction.isLate).toBe(false);
+    expect(day.prediction.summary).toMatch(/next period most likely around 2024-06-17/i);
+    expect(current(day.prediction).interval80.range.end).toBe('2024-06-22');
+  });
+
+  it('stops naming it in the future tense once that range has run out', () => {
+    // The same date, still the only date the engine has, but every day it
+    // covered is now in the past. "Next period most likely around 2024-06-17" on
+    // 2024-06-23 is the smaller version of the months-old date the stale state
+    // exists to remove.
+    const analysis = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
+    const overdue = late(analysis.prediction);
+    expect(overdue.isStale).toBe(false);
+    expect(overdue.expectedDate).toBe('2024-06-17');
+    expect(overdue.daysLate).toBe(6);
+    expect(overdue.summary).not.toMatch(/most likely/i);
+    expect(overdue.summary).toMatch(/expected around 2024-06-17, 6 days ago/);
+    // The forward-looking dates are gone rather than flagged, for the same
+    // reason they are gone from the stale prediction.
+    expect(Object.keys(overdue)).not.toContain('pointDate');
+    expect(Object.keys(overdue)).not.toContain('interval50');
+    expect(Object.keys(overdue)).not.toContain('interval80');
+  });
+
+  it('agrees with the phase model about the state of the log', () => {
+    // The prediction is drawn later than the phase model on purpose, so the one
+    // thing that must never happen is a late prediction beside a phase model
+    // that thinks the cycle is running normally.
+    const days = ['2024-06-16', '2024-06-17', '2024-06-20', '2024-06-23', '2024-07-15'];
+    const states = days.map((today) => analyze(logFromStartDates(REGULAR_STARTS), { today }));
+    for (const analysis of states) {
+      if (analysis.prediction.isLate) expect(analysis.phases.isLate).toBe(true);
+    }
+    // And the window where they differ is the one the tiers are cut for, so the
+    // check above is not vacuous in either direction.
+    expect(states.map((analysis) => analysis.prediction.isLate)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+    ]);
+    expect(states.map((analysis) => analysis.phases.isLate)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true,
+    ]);
   });
 
   it('suppresses the fertile window while late, as the stale state does', () => {
-    const late = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
-    expect(late.phases.isLate).toBe(true);
-    expect(late.phases.daysLate).toBe(6);
-    expect(late.phases.fertileWindow).toBeUndefined();
-    expect(late.phases.estimatedOvulationDate).toBeUndefined();
+    const overdue = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-06-23' });
+    expect(overdue.phases.isLate).toBe(true);
+    expect(overdue.phases.daysLate).toBe(6);
+    expect(overdue.phases.fertileWindow).toBeUndefined();
+    expect(overdue.phases.estimatedOvulationDate).toBeUndefined();
   });
 
   it('is not late on the predicted day minus one', () => {
@@ -156,15 +214,19 @@ describe('a period that is running late', () => {
 });
 
 describe('a log she stopped keeping', () => {
-  // Staleness needs both a far predictive quantile and two expected cycles of
-  // silence, which for this history puts the bound at 2024-07-15.
+  // Staleness needs both a far predictive quantile and two elapsed cycle lengths
+  // of silence, which for this history puts the bound at 2024-07-15.
   const boundary = analyze(logFromStartDates(REGULAR_STARTS), { today: '2024-07-15' });
 
-  it('behaves normally right up to the last day the prediction covers', () => {
+  it('is still only late on the last day the prediction covers', () => {
     expect(boundary.prediction.isStale).toBe(false);
-    expect(boundary.prediction.summary).toMatch(/next period most likely/i);
     expect(boundary.phases.isStale).toBe(false);
     expect(boundary.currentPhase?.phase).toBe('late');
+    // Four weeks past the point date by now, and it reads as the date that did
+    // not happen rather than as the date the next period is due.
+    expect(late(boundary.prediction).expectedDate).toBe('2024-06-17');
+    expect(late(boundary.prediction).daysLate).toBe(28);
+    expect(boundary.prediction.summary).not.toMatch(/most likely/i);
   });
 
   it('reports the stale state once today is past that bound', () => {

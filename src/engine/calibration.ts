@@ -142,14 +142,12 @@ export function emptyCalibration(): CalibrationSummary {
 export function buildCalibration(cycles: readonly DerivedCycle[]): CalibrationSummary {
   const records: CalibrationRecord[] = [];
   const acceptedLengths: number[] = [];
-  let loggedStartCount = 0;
   // The widen factor needs nothing from the records but how many there are and
   // how many landed inside the 80% range, so both are carried forward rather
   // than recomputed from the whole list at every step.
   let within80Count = 0;
 
   for (const cycle of cycles) {
-    loggedStartCount += 1;
     if (cycle.lengthDays === undefined || cycle.nextStartDate === undefined) continue;
     if (cycle.suspectedMissedLog) continue;
 
@@ -160,7 +158,6 @@ export function buildCalibration(cycles: readonly DerivedCycle[]): CalibrationSu
       today: cycle.startDate,
       posterior,
       usedCycleCount: acceptedLengths.length,
-      loggedStartCount,
       widenFactor: widenFactorFor(records.length, coverage80SoFar),
     });
 

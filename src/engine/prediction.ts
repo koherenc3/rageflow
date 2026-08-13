@@ -9,14 +9,16 @@
  * Two shapes come out of here. {@link nextStartEstimate} is the arithmetic, with
  * every date populated, and it is what calibration grades and what the phase
  * model is anchored to. {@link describePrediction} is what a consumer may show,
- * and once the log has gone stale it has no dates on it at all.
+ * and it withholds dates as the calendar overtakes them: the intervals once
+ * today is past the far end of the 80% range, and everything once the log has
+ * gone stale.
  */
 
-import { addRoundedDays, compareDates, diffDays, maxDate, type ISODate } from './date';
+import { addRoundedDays, compareDates, diffDays, type ISODate } from './date';
 import {
   INTERVAL_50,
   INTERVAL_80,
-  STALE_MIN_MISSED_CYCLES,
+  STALE_MIN_ELAPSED_CYCLES,
   STALE_PREDICTIVE_QUANTILE,
 } from './constants';
 import { predictiveInterval, predictiveQuantile } from './cycleLength';
@@ -55,10 +57,11 @@ function validThroughFor(
   widenFactor: number
 ): ISODate {
   const tail = predictiveQuantile(posterior.predictive, STALE_PREDICTIVE_QUANTILE, widenFactor);
-  const floor = STALE_MIN_MISSED_CYCLES * posterior.predictive.location;
-  return maxDate(addRoundedDays(anchor, tail), addRoundedDays(anchor, floor));
+  const floor = STALE_MIN_ELAPSED_CYCLES * posterior.predictive.location;
+  return addRoundedDays(anchor, Math.max(tail, floor));
 }
 
+/** Everything the arithmetic needs, and nothing else. */
 export interface PredictNextStartInput {
   /** Most recent logged period start. Absent when nothing has been logged. */
   lastStartDate?: ISODate;
@@ -67,10 +70,21 @@ export interface PredictNextStartInput {
   posterior: CycleLengthPosterior;
   /** Complete, non-skipped cycles in the fit. */
   usedCycleCount: number;
-  /** Period starts in the log, which can exceed `usedCycleCount` by one. */
-  loggedStartCount: number;
   /** Interval multiplier from layer 3. */
   widenFactor?: number;
+}
+
+/**
+ * The extra field only the wording needs.
+ *
+ * It is split out rather than sitting on {@link PredictNextStartInput} because
+ * nothing in {@link nextStartEstimate} reads it, and a required field that the
+ * arithmetic ignores makes every caller that wants only the numbers invent a
+ * value to satisfy the type.
+ */
+export interface DescribeNextStartInput extends PredictNextStartInput {
+  /** Period starts in the log, which can exceed `usedCycleCount` by one. */
+  loggedStartCount: number;
 }
 
 /** The dates the model computes, with nothing withheld. */
@@ -98,22 +112,42 @@ export function nextStartEstimate(input: PredictNextStartInput): NextStartEstima
   };
 }
 
+function dayNoun(days: number): string {
+  return days === 1 ? '1 day' : `${days} days`;
+}
+
 /**
- * What a consumer is allowed to see.
+ * What a consumer is allowed to see, in three tiers cut at boundaries the model
+ * already computes.
  *
- * Once today is past `validThrough` the prediction has been contradicted by the
- * calendar: the period it describes did not arrive, or it did and was not
- * logged. Every date on it is in the past at that point, so they are dropped
- * rather than flagged. A sentence beginning "next period most likely around" is
- * a plain false statement then, and a boolean beside a still-present `pointDate`
- * only helps the consumer who remembers to read it.
+ * While today is inside the 80% interval the prediction is presented in full.
+ * That bound is deliberately not the point date: a period arriving a day or two
+ * after the most likely date is the ordinary case the interval exists to cover,
+ * and dropping the range there would throw away the honest part of the answer.
+ *
+ * Past the interval the prediction has been outlived by the calendar. Its point
+ * date is reported in the past tense as the date the period was expected, and
+ * both intervals are dropped, because every day in them has already been and
+ * gone and a range offered as when the period is due would be false.
+ *
+ * Past `validThrough` the silence has run longer than the model can account for
+ * and every date goes, including the one that was expected. A sentence beginning
+ * "next period most likely around" is a plain false statement in either of the
+ * last two tiers, and a boolean beside a still-present `pointDate` only helps
+ * the consumer who remembers to read it, which is why the union is discriminated
+ * rather than optional.
  */
 export function describePrediction(
   estimate: NextStartEstimate,
-  input: PredictNextStartInput
+  input: DescribeNextStartInput
 ): NextStartPrediction {
   const { today, usedCycleCount, loggedStartCount } = input;
   const { lastStartDate } = estimate;
+  const history = coldStartMessage(
+    usedCycleCount,
+    loggedStartCount,
+    input.posterior.predictive.standardDeviation
+  );
 
   const common = {
     ...(lastStartDate === undefined ? {} : { lastStartDate }),
@@ -128,11 +162,29 @@ export function describePrediction(
     return {
       ...common,
       lastStartDate,
+      isLate: false,
       isStale: true,
       summary: [
         `This prediction is out of date. Your last logged period start was ${lastStartDate}, ${diffDays(lastStartDate, today)} days ago, and nothing has been logged since.`,
         'Log a period start, either one you missed or your next one, to get a current estimate.',
-        coldStartMessage(usedCycleCount, loggedStartCount),
+        history,
+      ].join(' '),
+    };
+  }
+
+  if (lastStartDate !== undefined && compareDates(today, estimate.interval80.range.end) > 0) {
+    const daysLate = diffDays(estimate.pointDate, today);
+    return {
+      ...common,
+      lastStartDate,
+      isLate: true,
+      isStale: false,
+      expectedDate: estimate.pointDate,
+      daysLate,
+      summary: [
+        `Your period was expected around ${estimate.pointDate}, ${dayNoun(daysLate)} ago, and the range around that date has passed with nothing logged since ${lastStartDate}.`,
+        'Log a period start when it arrives and the estimate will pick up from there.',
+        history,
       ].join(' '),
     };
   }
@@ -144,6 +196,7 @@ export function describePrediction(
 
   return {
     ...common,
+    isLate: false,
     isStale: false,
     pointDate: estimate.pointDate,
     interval50: estimate.interval50,
@@ -152,11 +205,11 @@ export function describePrediction(
       `Next period most likely around ${estimate.pointDate}.`,
       `There is a 50% chance it falls between ${estimate.interval50.range.start} and ${estimate.interval50.range.end}, and an 80% chance between ${estimate.interval80.range.start} and ${estimate.interval80.range.end}.`,
       basis,
-      coldStartMessage(usedCycleCount, loggedStartCount),
+      history,
     ].join(' '),
   };
 }
 
-export function predictNextStart(input: PredictNextStartInput): NextStartPrediction {
+export function predictNextStart(input: DescribeNextStartInput): NextStartPrediction {
   return describePrediction(nextStartEstimate(input), input);
 }

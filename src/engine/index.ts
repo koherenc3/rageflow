@@ -22,9 +22,9 @@ import {
 } from './cycles';
 import { fitCycleLength } from './cycleLength';
 import { buildCalibration } from './calibration';
-import { describePrediction, nextStartEstimate, type PredictNextStartInput } from './prediction';
+import { describePrediction, nextStartEstimate, type DescribeNextStartInput } from './prediction';
 import { buildPhaseModel, learnLutealLength, learnPeriodLength, phaseForDate } from './phases';
-import { coldStartMessage, confidenceFor, confidenceTierFor, isPersonalized } from './confidence';
+import { coldStartMessage } from './confidence';
 import type { CycleAnalysis, CycleLog, DayEntry } from './types';
 import type { PhaseInputs } from './phases';
 
@@ -49,7 +49,7 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
   const calibration = buildCalibration(cycles);
 
   const lastStart = lastStartDate(cycles);
-  const predictionInput: PredictNextStartInput = {
+  const predictionInput: DescribeNextStartInput = {
     ...(lastStart === undefined ? {} : { lastStartDate: lastStart }),
     today,
     posterior,
@@ -62,13 +62,9 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
   // in-progress cycle still has to be placed against the start it was fitted to.
   const estimate = nextStartEstimate(predictionInput);
   const prediction = describePrediction(estimate, predictionInput);
-
-  const confidence = confidenceFor(
-    posterior.weightSum,
-    posterior.predictive.standardDeviation,
-    posterior.halfLife
-  );
-  const confidenceTier = confidenceTierFor(lengths.length);
+  // Read off the estimate rather than recomputed from the same inputs, so the
+  // two can never drift apart if the derivation changes in only one place.
+  const { confidence, confidenceTier, personalized } = estimate;
 
   const phaseInputs: PhaseInputs = {
     cycles,
@@ -96,8 +92,12 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
     missedLogSuspicions,
     confidence,
     confidenceTier,
-    personalized: isPersonalized(lengths.length),
-    coldStartMessage: coldStartMessage(lengths.length, cycles.length),
+    personalized,
+    coldStartMessage: coldStartMessage(
+      lengths.length,
+      cycles.length,
+      posterior.predictive.standardDeviation
+    ),
   };
 }
 

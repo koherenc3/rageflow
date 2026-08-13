@@ -2,10 +2,11 @@ import {
   COLD_START_LOW_MAX_CYCLES,
   COLD_START_MODERATE_MAX_CYCLES,
   CONFIDENCE_MAX,
+  CONFIDENCE_PRECISION_TAIL,
   CONFIDENCE_SD_CEILING_DAYS,
   RECENCY_HALF_LIFE_CYCLES,
 } from './constants';
-import { maxWeightSum, minPredictiveSd } from './cycleLength';
+import { maxWeightSum, minPredictiveSd, priorPosterior } from './cycleLength';
 import { clamp } from './stats';
 import type { ConfidenceTier } from './types';
 
@@ -46,6 +47,17 @@ export function confidenceTierFor(usedCycleCount: number): ConfidenceTier {
  * with every extra cycle and every tighter interval, at the price of 0.95 being
  * an asymptote that a real history approaches and never quite reaches. Both of
  * the factors are already bounded to [0, 1], so the result cannot exceed it.
+ *
+ * The bottom of the precision factor is an asymptote too, and for the same
+ * reason in reverse. The linear ramp reaches zero at the spread ceiling, and a
+ * factor of zero makes the whole number zero, so years of genuinely erratic
+ * cycles reported exactly what a log with nothing in it reports. Those are
+ * different states. Under the ramp sits a geometric tail that is worth
+ * `CONFIDENCE_PRECISION_TAIL` at the ceiling and keeps decaying past it without
+ * ever arriving at zero, so a very low number stays a number rather than
+ * collapsing into the no-data case. The tail only bites where the ramp has
+ * nearly run out, so every history tight enough to be worth reporting on is
+ * unaffected. Zero is left to mean one thing: no data.
  */
 export function confidenceFor(
   weightSum: number,
@@ -55,11 +67,12 @@ export function confidenceFor(
   if (weightSum <= 0) return 0;
   const dataFactor = clamp(weightSum / maxWeightSum(halfLife), 0, 1);
   const spread = Number.isFinite(predictiveSd) ? predictiveSd : CONFIDENCE_SD_CEILING_DAYS;
-  const precisionFactor = clamp(
-    (CONFIDENCE_SD_CEILING_DAYS - spread) /
-      (CONFIDENCE_SD_CEILING_DAYS - minPredictiveSd(halfLife)),
-    0,
-    1
+  const tightest = minPredictiveSd(halfLife);
+  // 0 at the tightest spread the priors allow, 1 at the ceiling, unbounded past it.
+  const excess = Math.max(0, spread - tightest) / (CONFIDENCE_SD_CEILING_DAYS - tightest);
+  const precisionFactor = Math.max(
+    clamp(1 - excess, 0, 1),
+    Math.pow(CONFIDENCE_PRECISION_TAIL, excess)
   );
   return CONFIDENCE_MAX * dataFactor * precisionFactor;
 }
@@ -69,15 +82,37 @@ function cycleNoun(count: number): string {
 }
 
 /**
+ * A fit no tighter than knowing nothing about her at all.
+ *
+ * The comparison is against the untouched population prior's own predictive
+ * spread rather than a tuned threshold, so it says exactly what it means: her
+ * cycles vary enough that all that history has bought no more precision than the
+ * baseline everyone starts from.
+ */
+function isWideSpread(predictiveSdDays: number | undefined): boolean {
+  if (predictiveSdDays === undefined) return false;
+  return !(predictiveSdDays < priorPosterior().predictive.standardDeviation);
+}
+
+/**
  * The sentence the UI shows about how much history the prediction rests on.
  *
  * `loggedStartCount` only changes the wording of the no-data case: one logged
  * period gives us somewhere to count from but no observed cycle length, so the
  * length estimate is still entirely the population prior and has to say so.
+ *
+ * `predictiveSdDays` splits the top tier in two. Volume alone drives the tier,
+ * which is deliberate, but volume alone does not make a prediction worth
+ * trusting: a long history of genuinely erratic cycles has plenty of data and a
+ * range that stays wide anyway. Saying there is enough history to report
+ * confidence properly next to a confidence near zero reads as a contradiction,
+ * so the wide case names the spread instead. Omit it and the wording stays
+ * volume-only.
  */
 export function coldStartMessage(
   usedCycleCount: number,
-  loggedStartCount = usedCycleCount
+  loggedStartCount = usedCycleCount,
+  predictiveSdDays?: number
 ): string {
   switch (confidenceTierFor(usedCycleCount)) {
     case 'none':
@@ -89,7 +124,9 @@ export function coldStartMessage(
     case 'moderate':
       return `Based on ${cycleNoun(usedCycleCount)}. This is personalized to you and the range is still tightening.`;
     case 'high':
-      return `Based on ${cycleNoun(usedCycleCount)}. There is enough history to report confidence properly.`;
+      return isWideSpread(predictiveSdDays)
+        ? `Based on ${cycleNoun(usedCycleCount)}. That is plenty of history, but your cycles vary enough that the range stays wide.`
+        : `Based on ${cycleNoun(usedCycleCount)}. There is enough history to report confidence properly.`;
   }
 }
 
