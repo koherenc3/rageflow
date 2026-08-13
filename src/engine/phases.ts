@@ -23,6 +23,7 @@ import {
   LUTEAL_OBSERVATION_SD_DAYS,
   LUTEAL_PRIOR_MEAN_DAYS,
   LUTEAL_PRIOR_SD_DAYS,
+  MAX_FITTABLE_PERIOD_LENGTH_DAYS,
   PERIOD_OBSERVATION_SD_DAYS,
   PERIOD_PRIOR_MEAN_DAYS,
   PERIOD_PRIOR_SD_DAYS,
@@ -152,7 +153,9 @@ interface CycleWindows {
   /**
    * The span the bleed of this cycle occupies: from the logged start to the
    * logged end when she recorded one, and to the learned length when she did
-   * not. Every other window of this cycle is laid out around it and it is never
+   * not, with the part of that reaching past today bounded by
+   * `MAX_FITTABLE_PERIOD_LENGTH_DAYS` and by the next start the engine expects.
+   * Every other window of this cycle is laid out around it and it is never
    * published, because it can name days that have not happened. The days it
    * names that have not happened report `predicted-menstrual`, which is the
    * phase for a bleed day the engine expects rather than one it was told about.
@@ -226,9 +229,10 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  * cycles with no logged end, and the bleed the engine expects next, and nothing
  * else.
  *
- * A logged end is taken at face value, including one that is longer than any
- * plausible period. `MAX_FITTABLE_PERIOD_LENGTH_DAYS` keeps a mistyped entry out
- * of the fit and deliberately does not clamp what is shown; see
+ * A logged end is taken at face value for the days of it that have arrived,
+ * including one that is longer than any plausible period.
+ * `MAX_FITTABLE_PERIOD_LENGTH_DAYS` keeps a mistyped entry out of the fit and
+ * deliberately does not clamp what is shown of the days that have happened; see
  * `docs/DECISIONS.md`.
  *
  * The bleed does two jobs here and they are two different questions, so it is
@@ -237,11 +241,10 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  *
  * - THE RECORDED BLEED SPAN GOVERNS LAYOUT. She recorded those days as a
  *   period, so nothing else may claim them. `bleedSpan` runs to the end she
- *   typed however far out it is, and the fertile and premenstrual cuts are
- *   taken against it, so an end date typed for a day that has not arrived
- *   suppresses the fertility estimate over those days exactly as one typed for
- *   a day that has. Whether the calendar has caught up with her entry cannot
- *   change what her entry says.
+ *   typed, and the fertile and premenstrual cuts are taken against it, so an end
+ *   date typed for a day that has not arrived suppresses the fertility estimate
+ *   over every day of it the span reaches, exactly as one typed for a day that
+ *   has.
  * - THE NEVER-PAST-TODAY RULE GOVERNS ASSERTION. The engine must not tell her
  *   she is bleeding tomorrow. `menstrual` is `bleedSpan` cut off at today, and
  *   it is the only one of the two that is published or that a day is tested
@@ -249,6 +252,20 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  *   Showing a 22 day bleed that has already happened is showing her data as it
  *   is; saying she is bleeding on days that have not happened is a claim about
  *   the future, and a logged fact about the future is not a fact.
+ *
+ * The span itself is bounded past today for the same reason, and only past
+ * today. Every day of it that has already elapsed is her data and is drawn at
+ * whatever length she typed. The days of it that have not are the engine
+ * projecting her entry forward, which is a claim about the future like any
+ * other, so it is bounded like any other: `projectionEnd` stops at the longest
+ * bleed the fit will accept, `MAX_FITTABLE_PERIOD_LENGTH_DAYS`, or at the day
+ * before the next start the engine expects, whichever comes first. The bound is
+ * the fit's rather than a second one tuned here, because how long a period can
+ * plausibly run is one question and it has one answer. Without it a single
+ * mistyped year reached eleven months forward in both of the jobs above, calling
+ * every day of them a continuation of her bleed and suppressing the fertility
+ * estimate across all of them. Both uses read the one bounded span, so neither
+ * can be bounded without the other.
  *
  * So the days between today and the end of the span are laid out as bleed and
  * reported as `predicted-menstrual` until they arrive: a bleed day the engine
@@ -295,12 +312,17 @@ function windowsFor(cycle: DerivedCycle, inputs: PhaseInputs, state: LogState): 
   const lutealDays = Math.max(1, roundDays(inputs.lutealLength.meanDays));
   const ovulationDay = addDays(cycleEnd, -lutealDays);
   const loggedEnd = cycle.endDate;
+  const recordedEnd =
+    loggedEnd === undefined
+      ? addDays(cycleStart, predictedBleedDays - 1)
+      : maxDate(cycleStart, loggedEnd);
+  const projectionEnd = minDate(
+    addDays(cycleStart, MAX_FITTABLE_PERIOD_LENGTH_DAYS - 1),
+    addDays(cycleEnd, -1)
+  );
   const bleedSpan = {
     start: cycleStart,
-    end:
-      loggedEnd === undefined
-        ? addDays(cycleStart, predictedBleedDays - 1)
-        : maxDate(cycleStart, loggedEnd),
+    end: minDate(recordedEnd, maxDate(inputs.today, projectionEnd)),
   };
   const assertedEnd = minDate(bleedSpan.end, inputs.today);
   const menstrual =
@@ -609,11 +631,16 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  * around the whole bleed rather than around the part of it that has happened.
  *
  * The days between today and the end of that span report `predicted-menstrual`,
- * in every state, with `predictedBleedBasis` of `continues-logged-bleed`. They
- * are days of a bleed that has not happened, so they cannot be `menstrual`, and
- * they are days the layout has reserved as bleed, so nothing else may claim
- * them either: leaving them to the follicular or luteal split would have the
- * engine contradict an entry she typed in herself.
+ * with `predictedBleedBasis` of `continues-logged-bleed`. They are days of a
+ * bleed that has not happened, so they cannot be `menstrual`, and they are days
+ * the layout has reserved as bleed, so nothing else may claim them either:
+ * leaving them to the follicular or luteal split would have the engine
+ * contradict an entry she typed in herself. There are only ever such days while
+ * the log is `current`, because `windowsFor` stops the span short of the next
+ * start the engine expects, and `late` and `stale` are both states today has
+ * already reached that start in. So this is not a fourth way for a state to
+ * reach past today either: the whole of the reach past today is the `current`
+ * bullet below, and every day of it is a day the engine expects a bleed on.
  *
  * - While the log is `current`, every date up to the last day of the bleed the
  *   engine expects next reports a phase, and dates past that return undefined.
@@ -622,15 +649,25 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  *   whole of what this function claims about days that have not happened, and is
  *   named so neither can be read as a bleed she logged.
  * - While today is `late`, dates from the predicted start through today report
- *   `late`, dates after today return undefined unless the bleed span reaches
- *   them, and dates between the last logged start and the predicted start keep
- *   their ordinary phase, read off the windows the model still holds. It holds
- *   no fertile or premenstrual window while late, so those days of this cycle
- *   come back `menstrual`, `follicular` or `luteal` and never `fertile` or
- *   `premenstrual`.
+ *   `late`, dates after today return undefined, and dates between the last
+ *   logged start and the predicted start keep their ordinary phase, read off the
+ *   windows the model still holds. It holds no fertile or premenstrual window
+ *   while late, so those days of this cycle come back `menstrual`, `follicular`
+ *   or `luteal` and never `fertile` or `premenstrual`.
  * - While today is `stale`, dates from the last logged start through today report
  *   `stale` except inside the logged bleed, which reports `menstrual`, and dates
  *   after today return undefined on the same terms.
+ *
+ * A bleed she logged an end for can still cover the predicted start and the days
+ * after it, once those days have arrived, and then it is the bleed she recorded
+ * that they report. The days of the bleed expected next are numbered from the
+ * predicted start rather than from the first of them this function hands back,
+ * so it is worth saying that the two cannot come apart: `expected-next-bleed` is
+ * reported only while the log is `current`, which is a state today has not
+ * reached the predicted start in, and the bleed of the cycle she is in is not
+ * projected as far as that start, so neither answer can take a day from the
+ * front of that run. It begins at day 1 or it does not begin, and a calendar
+ * drawing a day-N-of-M ring for it can rely on that.
  *
  * Neither `late` nor `stale` reaches past today, because a cycle whose start has
  * not happened cannot place anything after it, and a model with no credible cycle

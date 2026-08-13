@@ -334,6 +334,12 @@ describe('an end date logged for days that have not happened', () => {
   ];
   const { cycles } = deriveCycles({ version: 1, entries }, AFTER_EVERY_START);
 
+  // The last day of her entry the engine will carry forward past today: the
+  // longest bleed the fit will accept, counted from the start she logged.
+  // Projecting her entry further is a claim about the future rather than a
+  // record of anything, and it gets the bound every other projection gets.
+  const PROJECTED_THROUGH = addDays('2024-02-26', MAX_FITTABLE_PERIOD_LENGTH_DAYS - 1);
+
   function on(today: string): PhaseInputs {
     return {
       cycles,
@@ -364,50 +370,65 @@ describe('an end date logged for days that have not happened', () => {
 
   it('says she is bleeding on no day that has not arrived', () => {
     // Walked rather than sampled, and named as the phase each day does get, so
-    // the loop cannot pass by those days coming back with no phase at all. The
-    // days of her entry that have not arrived are bleed days the engine expects
-    // rather than ones it has been told about: not `menstrual`, which would be a
-    // fact about a day that has not happened, and not the follicular or luteal
-    // half either, which would contradict an entry she typed in herself. The
-    // days past her entry take their ordinary phase.
+    // the loop cannot pass by those days coming back with no phase at all. No
+    // day past today is a period she recorded, on the strength of her entry or
+    // of anything else. The days of it the engine still carries forward are
+    // bleed days it expects rather than ones it has been told about: not
+    // `menstrual`, which would be a fact about a day that has not happened, and
+    // not the follicular or luteal half either, which would contradict an entry
+    // she typed in herself. Past the projection her entry stops holding days
+    // back, and they take their ordinary phase exactly as the days past it do.
     const today = '2024-03-10';
     const inputs = on(today);
-    let insideTheEntry = 0;
-    let pastIt = 0;
+    let projected = 0;
+    let pastTheProjection = 0;
     for (const date of walkDates('2024-02-26', '2024-03-24')) {
       const estimate = phaseForDate(inputs, date);
       if (diffDays(today, date) <= 0) continue;
       expect(estimate?.summary, date).not.toMatch(/Period\./);
-      if (diffDays(date, '2024-03-20') >= 0) {
-        insideTheEntry += 1;
+      if (diffDays(date, PROJECTED_THROUGH) >= 0) {
+        projected += 1;
         expect(estimate?.phase, date).toBe('predicted-menstrual');
         expect(estimate?.predictedBleedBasis, date).toBe('continues-logged-bleed');
       } else {
-        pastIt += 1;
+        pastTheProjection += 1;
         expect(['follicular', 'fertile', 'luteal', 'premenstrual'], date).toContain(
           estimate?.phase
         );
       }
     }
-    // Not vacuous in either direction: ten days of her entry are in the future
-    // here, and four days past it are walked as well.
-    expect(insideTheEntry).toBe(10);
-    expect(pastIt).toBe(4);
+    // Not vacuous in either direction: a day of her entry past today is carried
+    // forward here, and thirteen days past the projection are walked as well.
+    expect(projected).toBe(1);
+    expect(pastTheProjection).toBe(13);
   });
 
-  it('words those days as her own entry running on rather than as a guess', () => {
+  it('words the days it does carry forward as her entry rather than as a guess', () => {
     // The provenance a consumer can read off the sentence, and the field that
     // means it does not have to. This day belongs to a period whose start she
     // typed in, so the sentence names that start, and it still says the day has
     // not arrived, because an entry about a day that has not happened is not a
     // record of it.
-    const estimate = phaseForDate(on('2024-03-10'), '2024-03-15');
+    const estimate = phaseForDate(on('2024-03-10'), PROJECTED_THROUGH);
     expect(estimate?.phase).toBe('predicted-menstrual');
     expect(estimate?.predictedBleedBasis).toBe('continues-logged-bleed');
-    expect(estimate?.dayOfCycle).toBe(diffDays('2024-02-26', '2024-03-15') + 1);
+    expect(estimate?.dayOfCycle).toBe(diffDays('2024-02-26', PROJECTED_THROUGH) + 1);
     expect(estimate?.summary).toBe(
-      `Day ${diffDays('2024-02-26', '2024-03-15') + 1} of the period you logged starting on 2024-02-26. This day has not arrived yet, so it is still expected rather than a day you have recorded bleeding on.`
+      `Day ${diffDays('2024-02-26', PROJECTED_THROUGH) + 1} of the period you logged starting on 2024-02-26. This day has not arrived yet, so it is still expected rather than a day you have recorded bleeding on.`
     );
+  });
+
+  it('carries it no further forward than a period could plausibly run', () => {
+    // The bound on the projection, in the direction it matters: the day after
+    // the longest bleed the fit would accept is not claimed as her bleed, and
+    // the reach does not grow with the size of the typo. She typed nine more
+    // days than this after it.
+    const inputs = on('2024-03-10');
+    const last = phaseForDate(inputs, PROJECTED_THROUGH);
+    const past = phaseForDate(inputs, addDays(PROJECTED_THROUGH, 1));
+    expect(last?.predictedBleedBasis).toBe('continues-logged-bleed');
+    expect(past?.phase).not.toBe('predicted-menstrual');
+    expect(diffDays(PROJECTED_THROUGH, '2024-03-20')).toBe(9);
   });
 
   it('reads differently from the bleed the engine expects next', () => {
@@ -416,7 +437,7 @@ describe('an end date logged for days that have not happened', () => {
     // counted from a start nothing has been logged for; this one is counted
     // from a start she typed in.
     const inputs = on('2024-03-10');
-    const continues = phaseForDate(inputs, '2024-03-15');
+    const continues = phaseForDate(inputs, PROJECTED_THROUGH);
     const expected = phaseForDate(inputs, '2024-03-26');
     expect(continues?.phase).toBe('predicted-menstrual');
     expect(continues?.predictedBleedBasis).toBe('continues-logged-bleed');
@@ -427,20 +448,24 @@ describe('an end date logged for days that have not happened', () => {
     expect(expected?.dayOfCycle).toBe(2);
   });
 
-  it('publishes no fertility estimate over the days she recorded as a period', () => {
-    // She recorded those days as a period, so nothing else may claim them, and
-    // that is a fact about her entry rather than about the calendar. The window
-    // this cycle would otherwise have falls entirely inside what she typed, so
-    // there is none to publish, and today cannot be what decides that: the two
-    // models below are ten days apart and have to agree.
+  it('publishes no fertility estimate over the days of it the engine stands behind', () => {
+    // The layout and the assertion read one span, so the bound on the projection
+    // lands on both. Every day of her entry that has arrived holds its ground
+    // whatever else the arithmetic wanted to put there, and so does every day of
+    // it the engine is still willing to carry forward. What it will not do is
+    // hold days back on the strength of a projection it would not otherwise
+    // make, so the fertile window resumes the day after that projection ends
+    // rather than eleven months later on a badly mistyped year.
     const beforeTheEndArrives = buildPhaseModel(on('2024-03-10'));
     const afterItHas = buildPhaseModel(on('2024-03-20'));
-    for (const model of [beforeTheEndArrives, afterItHas]) {
-      expect(model.fertileWindow).toBeUndefined();
-      expect(model.estimatedOvulationDate).toBeUndefined();
+    expect(afterItHas.fertileWindow).toBeUndefined();
+    expect(afterItHas.estimatedOvulationDate).toBeUndefined();
+    expect(beforeTheEndArrives.fertileWindow?.start).toBe(addDays(PROJECTED_THROUGH, 1));
+    for (const date of walkDates('2024-02-26', PROJECTED_THROUGH)) {
+      expect(phaseForDate(on('2024-03-10'), date)?.phase, date).not.toBe('fertile');
     }
     for (const date of walkDates('2024-02-26', '2024-03-20')) {
-      expect(phaseForDate(on('2024-03-10'), date)?.phase, date).not.toBe('fertile');
+      expect(phaseForDate(on('2024-03-20'), date)?.phase, date).not.toBe('fertile');
     }
   });
 
@@ -455,13 +480,18 @@ describe('an end date logged for days that have not happened', () => {
     expect(diffDays(rawEnd, '2024-03-20')).toBeGreaterThan(0);
   });
 
-  it('lays the run-up out after the whole entry rather than after today', () => {
-    // The other window indexed backward from the cycle end. It starts the day
-    // after the bleed she recorded, not the day after today, so the layout is
-    // the same on both sides of the end she typed.
-    for (const today of ['2024-03-10', '2024-03-20']) {
-      expect(buildPhaseModel(on(today)).premenstrualWindow?.start, today).toBe('2024-03-21');
-    }
+  it('lays the run-up out after the bleed and the fertile window either way', () => {
+    // The other window indexed backward from the cycle end, cut against the same
+    // span. Once the whole entry has arrived it begins the day after it. Before
+    // that the entry is carried only as far as the projection, and what is left
+    // of the fertile window ends before the run-up would start anyway, so the
+    // run-up keeps its natural place. Neither overlaps what came before it.
+    const early = buildPhaseModel(on('2024-03-10'));
+    expect(early.premenstrualWindow?.start).toBe(addDays('2024-03-25', -PREMENSTRUAL_WINDOW_DAYS));
+    expect(
+      diffDays(early.fertileWindow?.end as string, early.premenstrualWindow?.start as string)
+    ).toBeGreaterThan(0);
+    expect(buildPhaseModel(on('2024-03-20')).premenstrualWindow?.start).toBe('2024-03-21');
   });
 
   it('reports the whole entry once the days it names have passed', () => {
@@ -476,6 +506,110 @@ describe('an end date logged for days that have not happened', () => {
     expect(phaseForDate(inputs, '2024-03-15')?.summary).toBe(
       `Day ${diffDays('2024-02-26', '2024-03-15') + 1}. Period.`
     );
+  });
+});
+
+describe('an end date mistyped into next year', () => {
+  // The far end of the same rule. She means 2024-01-31 and types 2024-12-31, so
+  // her entry names eleven months of days that have not happened. What the
+  // engine may say about them cannot scale with the size of her typo: a bound
+  // that is the length of whatever she typed is not a bound.
+  const starts = ['2024-01-01', '2024-01-29'];
+  const entries: DayEntry[] = [
+    ...starts.map((date): DayEntry => ({ date, kind: 'period-start' })),
+    { date: '2024-12-31', kind: 'period-end' },
+  ];
+  const { cycles } = deriveCycles({ version: 1, entries }, AFTER_EVERY_START);
+  const TODAY = '2024-02-10';
+  const PREDICTED_NEXT_START = '2024-02-26';
+  const inputs: PhaseInputs = {
+    cycles,
+    predictedNextStart: PREDICTED_NEXT_START,
+    predictionValidThrough: '2024-03-25',
+    today: TODAY,
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(observedPeriodLengths(cycles, TODAY)),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+
+  it('keeps the entry, and keeps it out of the fit', () => {
+    expect(cycles[1]?.endDate).toBe('2024-12-31');
+    expect(observedPeriodLengths(cycles, TODAY)).toEqual([]);
+    expect(inputs.periodLength.meanDays).toBe(PERIOD_PRIOR_MEAN_DAYS);
+  });
+
+  it('carries it forward no further than a period can plausibly run', () => {
+    const projectedThrough = addDays('2024-01-29', MAX_FITTABLE_PERIOD_LENGTH_DAYS - 1);
+    expect(phaseForDate(inputs, projectedThrough)?.predictedBleedBasis).toBe(
+      'continues-logged-bleed'
+    );
+    expect(phaseForDate(inputs, addDays(projectedThrough, 1))?.phase).not.toBe(
+      'predicted-menstrual'
+    );
+  });
+
+  it('still stops where the log lets it stop, rather than eleven months out', () => {
+    // The reach of a current log is the last day of the bleed it expects next,
+    // and one mistyped digit must not extend it. Sampled across the months her
+    // entry names, all of which are past that bound.
+    const lastDayItCanDescribe = addDays(PREDICTED_NEXT_START, PERIOD_PRIOR_MEAN_DAYS - 1);
+    expect(phaseForDate(inputs, lastDayItCanDescribe)?.phase).toBe('predicted-menstrual');
+    for (const date of ['2024-03-02', '2024-06-01', '2024-12-31']) {
+      expect(phaseForDate(inputs, date), date).toBeUndefined();
+    }
+  });
+
+  it('still publishes the fertility estimate her entry would have swallowed', () => {
+    // The layout reads the same bounded span, so the suppression stops where the
+    // projection does. A typo that reaches eleven months forward must not take
+    // the fertile window and the ovulation estimate with it for that long.
+    const model = buildPhaseModel(inputs);
+    const ovulation = addDays(PREDICTED_NEXT_START, -LUTEAL_PRIOR_MEAN_DAYS);
+    expect(model.estimatedOvulationDate).toBe(ovulation);
+    expect(model.fertileWindow?.end).toBe(addDays(ovulation, FERTILE_DAYS_AFTER_OVULATION));
+    expect(model.premenstrualWindow?.end).toBe(addDays(PREDICTED_NEXT_START, -1));
+    expect(phaseForDate(inputs, ovulation)?.phase).toBe('fertile');
+  });
+});
+
+describe('a logged bleed carried forward towards a start the engine expects', () => {
+  // The other half of the bound, on a deliberately artificial history: 12 day
+  // cycles, well below anything clinical, because a real cycle is longer than
+  // the plausible bleed bound and so that bound always bites first. Here it does
+  // not, and the projection has to stop at the predicted start anyway, because
+  // the days from there belong to the cycle the engine expects next and a bleed
+  // it has been told nothing about is a bleed of that one.
+  const starts = ['2024-01-01', '2024-01-13'];
+  const entries: DayEntry[] = [
+    ...starts.map((date): DayEntry => ({ date, kind: 'period-start' })),
+    { date: '2024-01-30', kind: 'period-end' },
+  ];
+  const { cycles } = deriveCycles({ version: 1, entries }, AFTER_EVERY_START);
+  const PREDICTED_NEXT_START = '2024-01-25';
+  const inputs: PhaseInputs = {
+    cycles,
+    predictedNextStart: PREDICTED_NEXT_START,
+    predictionValidThrough: '2024-02-20',
+    today: '2024-01-14',
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+
+  it('is a case where the plausible bleed bound would have reached further', () => {
+    expect(diffDays('2024-01-13', PREDICTED_NEXT_START)).toBeLessThan(
+      MAX_FITTABLE_PERIOD_LENGTH_DAYS - 1
+    );
+  });
+
+  it('carries it to the day before that start and no further', () => {
+    const lastProjected = phaseForDate(inputs, addDays(PREDICTED_NEXT_START, -1));
+    const first = phaseForDate(inputs, PREDICTED_NEXT_START);
+    expect(lastProjected?.predictedBleedBasis).toBe('continues-logged-bleed');
+    expect(first?.predictedBleedBasis).toBe('expected-next-bleed');
+    expect(first?.dayOfCycle).toBe(1);
   });
 });
 
@@ -591,9 +725,10 @@ describe('a logged bleed that runs past the predicted start', () => {
   // The ordering the whole design rests on, at the one point it can be tested:
   // a day that is both inside a bleed she logged and at or past a date the
   // engine predicted. The fact wins in every state of the log, once it is a
-  // fact: an end date reaching past the predicted start on a log that is still
-  // current is an entry about days that have not happened, and the same three
-  // days are walked here on both sides of that line.
+  // fact. Before it is one there is nothing to win with: an entry reaching the
+  // predicted start is 31 days long, so it is past both bounds on the
+  // projection, and the same three days are walked here on both sides of that
+  // line.
   const starts = ['2024-01-01', '2024-01-29', '2024-02-26'];
   const entries: DayEntry[] = [
     ...starts.map((date): DayEntry => ({ date, kind: 'period-start' })),
@@ -617,21 +752,45 @@ describe('a logged bleed that runs past the predicted start', () => {
   it('claims none of it before those days have happened', () => {
     // An end logged for 2024-03-27 with today on the 24th is an entry about
     // three days that have not arrived. The bleed is drawn to today and stops,
-    // and the days past it are expected rather than recorded, worded so the two
-    // cannot be confused. They are days of the bleed she is in and not of the
-    // one the engine expects next, even though the predicted start falls inside
-    // them: her entry covers those days, so the bleed it describes is the one
-    // they are counted from.
+    // and it is not carried across the start the engine predicts either, because
+    // the next cycle begins there and a bleed the engine has not been told about
+    // is a bleed of that one. So those days are the bleed expected next, from
+    // its first day, and none of them reads as a period she recorded.
     const inputs = on('2024-03-24');
     expect(phaseForDate(inputs, '2024-03-24')?.phase).toBe('menstrual');
     expect(buildPhaseModel(inputs).menstrualWindow?.end).toBe('2024-03-24');
-    for (const date of ['2024-03-25', '2024-03-27']) {
+    for (const date of walkDates('2024-03-25', '2024-03-27')) {
       const estimate = phaseForDate(inputs, date);
       expect(estimate?.phase, date).toBe('predicted-menstrual');
-      expect(estimate?.predictedBleedBasis, date).toBe('continues-logged-bleed');
-      expect(estimate?.dayOfCycle, date).toBe(diffDays('2024-02-26', date) + 1);
+      expect(estimate?.predictedBleedBasis, date).toBe('expected-next-bleed');
+      expect(estimate?.dayOfCycle, date).toBe(diffDays('2024-03-25', date) + 1);
       expect(estimate?.summary, date).not.toMatch(/Period\./);
     }
+  });
+
+  it('starts the bleed it expects next at its first day, never partway in', () => {
+    // The counter a calendar would draw a day-N-of-M ring from. Her entry covers
+    // the predicted start and the two days after it, so those days could have
+    // been taken from the front of that run and left it beginning at day 4. They
+    // cannot be: the run is reported only while the log is current, which is a
+    // state today has not reached the predicted start in, and the bleed of the
+    // cycle she is in is not projected as far as that start. Walked from the day
+    // before her entry ends to a day past the whole thing, so a today that broke
+    // it would have to be missed rather than merely not sampled.
+    let daysWithARun = 0;
+    for (const today of walkDates('2024-03-20', '2024-03-26')) {
+      const inputs = on(today);
+      const run = walkDates('2024-02-26', '2024-04-10')
+        .map((date) => phaseForDate(inputs, date))
+        .filter((estimate) => estimate?.predictedBleedBasis === 'expected-next-bleed')
+        .map((estimate) => estimate?.dayOfCycle);
+      // Past the predicted start the log is late, and a spent prediction is not
+      // reported at all, so there is no run to check on those days.
+      if (run.length === 0) continue;
+      daysWithARun += 1;
+      expect(run, today).toEqual([1, 2, 3, 4, 5]);
+    }
+    expect(daysWithARun).toBe(5);
   });
 
   it('reads as the bleed she logged the moment those days arrive', () => {
@@ -657,8 +816,8 @@ describe('a logged bleed that runs past the predicted start', () => {
     expect(diffDays('2024-02-26', '2024-03-27') + 1).toBe(31);
     const past = phaseForDate(inputs, '2024-03-29');
     expect(past?.phase).toBe('predicted-menstrual');
-    // Past the end she typed, so this is the bleed the engine expects next
-    // rather than hers running on, and it is counted from the predicted start.
+    // Two days past the end she typed, and the bleed expected next runs to it
+    // because that bleed is the learned length rather than hers.
     expect(past?.predictedBleedBasis).toBe('expected-next-bleed');
     expect(past?.dayOfCycle).toBe(diffDays('2024-03-25', '2024-03-29') + 1);
     expect(phaseForDate(inputs, '2024-03-30')).toBeUndefined();
