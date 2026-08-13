@@ -1,7 +1,8 @@
 /**
  * The small amount of statistics the engine needs, implemented locally.
  *
- * A general stats library would be a large dependency for four functions, and
+ * A general stats library would be a large dependency for a handful of
+ * functions, and
  * the Student-t quantile is the one number the whole prediction interval rests
  * on, so it is worth owning and unit-testing against published tables rather
  * than trusting a transitive dependency.
@@ -159,11 +160,4 @@ export function clamp(value: number, low: number, high: number): number {
   if (value < low) return low;
   if (value > high) return high;
   return value;
-}
-
-export function mean(values: readonly number[]): number {
-  if (values.length === 0) return Number.NaN;
-  let total = 0;
-  for (const value of values) total += value;
-  return total / values.length;
 }

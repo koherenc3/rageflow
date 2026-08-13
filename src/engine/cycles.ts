@@ -29,15 +29,39 @@ import type {
   DayEntry,
   DerivedCycle,
   FutureDatedStart,
+  InvalidLogEntry,
   MissedLogSuspicion,
 } from './types';
 
-function collectDates(entries: readonly DayEntry[], kind: DayEntry['kind']): ISODate[] {
+/**
+ * The dates of one kind of entry, sorted and de-duplicated, with anything that
+ * is not a calendar date reported into `invalid` rather than thrown.
+ *
+ * One corrupt row in a persisted log used to take the whole analysis down with
+ * it, which is the least useful thing it could do: she would see nothing at all
+ * rather than the rest of a history that is perfectly readable. It is the same
+ * treatment a future-dated start gets, for the same reason. The entry is left in
+ * the log untouched, never deleted and never silently rewritten, and the report
+ * is what lets a UI say why a row she can see is not counted.
+ */
+function collectDates(
+  entries: readonly DayEntry[],
+  kind: DayEntry['kind'],
+  invalid: InvalidLogEntry[]
+): ISODate[] {
   const seen = new Set<ISODate>();
+  const seenInvalid = new Set<unknown>();
   for (const entry of entries) {
     if (entry.kind !== kind) continue;
     if (!isValidISODate(entry.date)) {
-      throw new RangeError(`Log entry has an invalid date: ${JSON.stringify(entry.date)}`);
+      if (seenInvalid.has(entry.date)) continue;
+      seenInvalid.add(entry.date);
+      invalid.push({
+        date: entry.date,
+        kind,
+        message: `A ${kind === 'period-start' ? 'period start' : 'period end'} is logged as ${JSON.stringify(entry.date)}, which is not a calendar date in YYYY-MM-DD form. It is left out of the analysis and stays in your log.`,
+      });
+      continue;
     }
     seen.add(entry.date);
   }
@@ -86,6 +110,7 @@ export interface DerivationResult {
   cycles: DerivedCycle[];
   missedLogSuspicions: MissedLogSuspicion[];
   futureDatedStarts: FutureDatedStart[];
+  invalidEntries: InvalidLogEntry[];
 }
 
 /**
@@ -106,13 +131,21 @@ export interface DerivationResult {
  * same treatment an implausible bleed length gets in `observedPeriodLengths`,
  * and for the same reason. This is health data she typed in and the app does not
  * get to overwrite it.
+ *
+ * Excluding a start excludes what belongs to it. An end date sits between the
+ * start it belongs to and the next one, so leaving a start out without moving
+ * the boundary it provided hands its end to the last cycle that was kept, which
+ * is how a mistyped year once produced a 397 day period. `firstFutureStart` is
+ * that boundary, kept after the start itself is dropped.
  */
 export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
-  const ends = collectDates(log.entries, 'period-end');
+  const invalidEntries: InvalidLogEntry[] = [];
+  const loggedStarts = collectDates(log.entries, 'period-start', invalidEntries);
+  const ends = collectDates(log.entries, 'period-end', invalidEntries);
 
   const starts: ISODate[] = [];
   const futureDatedStarts: FutureDatedStart[] = [];
-  for (const date of collectDates(log.entries, 'period-start')) {
+  for (const date of loggedStarts) {
     if (compareDates(date, today) > 0) {
       futureDatedStarts.push({
         date,
@@ -122,6 +155,9 @@ export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
     }
     starts.push(date);
   }
+  // Sorted, so the first excluded start is the earliest of them and the last
+  // accepted cycle stops there rather than running to the end of the log.
+  const firstFutureStart = futureDatedStarts[0]?.date;
 
   const cycles: DerivedCycle[] = [];
   const missedLogSuspicions: MissedLogSuspicion[] = [];
@@ -132,11 +168,14 @@ export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
     const nextStartDate = starts[index + 1];
 
     // The logged end that belongs to this cycle: on or after the start, and
-    // strictly before the next one. Anything else is a stray entry.
+    // strictly before the next one she logged, whether or not that next start
+    // was counted as a cycle. Anything else is a stray entry, or belongs to a
+    // start this derivation left out.
+    const endBoundary = nextStartDate ?? firstFutureStart;
     const endDate = ends.find(
       (candidate) =>
         compareDates(candidate, startDate) >= 0 &&
-        (nextStartDate === undefined || compareDates(candidate, nextStartDate) < 0)
+        (endBoundary === undefined || compareDates(candidate, endBoundary) < 0)
     );
     const periodLengthDays = endDate === undefined ? undefined : diffDays(startDate, endDate) + 1;
 
@@ -188,7 +227,7 @@ export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
     });
   }
 
-  return { cycles, missedLogSuspicions, futureDatedStarts };
+  return { cycles, missedLogSuspicions, futureDatedStarts, invalidEntries };
 }
 
 /** Lengths that should go into the fit: complete cycles that are not suspected skips. */
@@ -210,13 +249,21 @@ export function fittableLengths(cycles: readonly DerivedCycle[]): number[] {
  * calls menstruation. Implausible ones are left out of the fit here, exactly as
  * a suspected missed log is left out of the cycle-length fit. The entry stays on
  * the derived cycle, so her own history still shows what she actually recorded.
+ *
+ * An end dated after `today` is left out on the same terms, because it is not an
+ * observation yet. A start on the 5th with the end mistyped as the 15th, read on
+ * the 7th, is three days of bleeding counted as eleven, and the length it puts
+ * into the fit biases every cycle after it upward. Nothing else about the entry
+ * changes: it stays on the cycle, the phase layer still lays the cycle's windows
+ * out around it, and the day it names starts counting when it arrives.
  */
-export function observedPeriodLengths(cycles: readonly DerivedCycle[]): number[] {
+export function observedPeriodLengths(cycles: readonly DerivedCycle[], today: ISODate): number[] {
   const lengths: number[] = [];
   for (const cycle of cycles) {
     const length = cycle.periodLengthDays;
     if (length === undefined) continue;
     if (length > MAX_FITTABLE_PERIOD_LENGTH_DAYS) continue;
+    if (cycle.endDate !== undefined && compareDates(cycle.endDate, today) > 0) continue;
     lengths.push(length);
   }
   return lengths;

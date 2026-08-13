@@ -47,7 +47,7 @@ The first version she can actually use.
 - Logging: one button for "my period started today", a date picker for backfilling, and an optional "it ended" entry. Nothing else.
 - Editing and deleting entries, because she will typo a date.
 - The prediction view: current phase, next period as a range not a date, days until, confidence. Including the `late` and `stale` states, which the engine already emits and which the UI must render as their own thing rather than as phases. A late prediction has no intervals to render and a stale one has no dates at all, by construction. A `predicted-menstrual` day has to look different from a logged period day too, since one is a fact and the other is an estimate.
-- The confirmation flow for suspected missed logs. The engine already emits the question; the UI has to ask it and act on the answer. Same for `futureDatedStarts`: the engine reports the entries it has not counted, and the date picker should not have made them easy to type in the first place.
+- The confirmation flow for suspected missed logs. The engine already emits the question; the UI has to ask it and act on the answer. Same for `futureDatedStarts` and `invalidEntries`: the engine reports the entries it has not counted, and the date picker should not have made them easy to type in the first place.
 - Clinical notes surfaced somewhere calm, not as an alarm.
 - The accuracy view: measured mean absolute error and observed coverage, shown honestly.
 - Cold start states rendered from the engine's tier, including the empty state.

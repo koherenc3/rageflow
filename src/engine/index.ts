@@ -42,7 +42,10 @@ export interface AnalyzeOptions {
 export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnalysis {
   const today = options.today ?? todayLocal();
 
-  const { cycles, missedLogSuspicions, futureDatedStarts } = deriveCycles(log, today);
+  const { cycles, missedLogSuspicions, futureDatedStarts, invalidEntries } = deriveCycles(
+    log,
+    today
+  );
   const lengths = fittableLengths(cycles);
   const posterior = fitCycleLength(lengths);
   const calibration = buildCalibration(cycles);
@@ -71,7 +74,7 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
     predictionValidThrough: estimate.validThrough,
     today,
     lutealLength: learnLutealLength(options.lutealObservations ?? []),
-    periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
+    periodLength: learnPeriodLength(observedPeriodLengths(cycles, today)),
     confidence,
     confidenceTier,
   };
@@ -90,6 +93,7 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
     clinicalNotes: deriveClinicalNotes(cycles),
     missedLogSuspicions,
     futureDatedStarts,
+    invalidEntries,
     confidence,
     confidenceTier,
     personalized,

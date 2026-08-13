@@ -150,11 +150,21 @@ interface CycleWindows {
    */
   predictedBleedDays: number;
   /**
-   * The bleed of this cycle. It runs from the logged start to the logged end
-   * when she recorded one, and to the learned length when she did not, and it
-   * never reaches past today on the strength of an end dated in the future.
+   * The span the bleed of this cycle occupies: from the logged start to the
+   * logged end when she recorded one, and to the learned length when she did
+   * not. Every other window of this cycle is laid out around it and it is never
+   * published, because it can name days that have not happened.
    */
-  menstrual: DateRange;
+  bleedSpan: DateRange;
+  /**
+   * The bleed of this cycle as the engine is willing to assert it, which is
+   * `bleedSpan` with everything after today taken off the back of it. This is
+   * the range that is published and the range a day is tested against.
+   *
+   * Absent when the whole span is still ahead of today, since a bleed the
+   * engine cannot claim a single day of is no bleed to report.
+   */
+  menstrual?: DateRange;
   /**
    * The estimated ovulation day. Always computed, because the follicular and
    * luteal halves of the cycle are read off it, and never handed out on its own:
@@ -219,14 +229,32 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  * of the fit and deliberately does not clamp what is shown; see
  * `docs/DECISIONS.md`.
  *
- * It is not read past today, which is the one bound on it and is a different
- * question from its length. Showing a 22 day bleed that has already happened is
- * showing her data as it is; saying she is bleeding on days that have not
- * happened is a claim about the future, and a logged fact about the future is
- * not a fact. So the bleed is drawn to today and stops there, and the days
- * between today and the end she typed take their ordinary phase until they
+ * The bleed does two jobs here and they are two different questions, so it is
+ * two values. Answering both with one range is what put a fertile window inside
+ * a span she had recorded as a period.
+ *
+ * - THE RECORDED BLEED SPAN GOVERNS LAYOUT. She recorded those days as a
+ *   period, so nothing else may claim them. `bleedSpan` runs to the end she
+ *   typed however far out it is, and the fertile and premenstrual cuts are
+ *   taken against it, so an end date typed for a day that has not arrived
+ *   suppresses the fertility estimate over those days exactly as one typed for
+ *   a day that has. Whether the calendar has caught up with her entry cannot
+ *   change what her entry says.
+ * - THE NEVER-PAST-TODAY RULE GOVERNS ASSERTION. The engine must not tell her
+ *   she is bleeding tomorrow. `menstrual` is `bleedSpan` cut off at today, and
+ *   it is the only one of the two that is published or that a day is tested
+ *   against, in every state of the log and whether or not she logged an end.
+ *   Showing a 22 day bleed that has already happened is showing her data as it
+ *   is; saying she is bleeding on days that have not happened is a claim about
+ *   the future, and a logged fact about the future is not a fact.
+ *
+ * So the days between today and the end of the span are laid out as bleed and
+ * reported as whatever phase is left once the bleed is ruled out, until they
  * arrive. Her entry is not altered by any of that, and the day it names becomes
- * a period day the moment it comes round.
+ * a period day the moment it comes round. The same cut applies to a cycle she
+ * logged no end for, where the span is the learned length: that end is an
+ * estimate rather than an entry, which is if anything less of a licence to say
+ * she was bleeding on a day that has not happened.
  *
  * The bleed is indexed forward from the cycle start and the fertile window
  * backward from the cycle end, so on a short cycle with a long period the two
@@ -264,14 +292,26 @@ function windowsFor(cycle: DerivedCycle, inputs: PhaseInputs, state: LogState): 
   const lutealDays = Math.max(1, roundDays(inputs.lutealLength.meanDays));
   const ovulationDay = addDays(cycleEnd, -lutealDays);
   const loggedEnd = cycle.endDate;
-  const menstrual = {
+  const bleedSpan = {
     start: cycleStart,
     end:
       loggedEnd === undefined
         ? addDays(cycleStart, predictedBleedDays - 1)
-        : maxDate(cycleStart, minDate(loggedEnd, inputs.today)),
+        : maxDate(cycleStart, loggedEnd),
   };
-  const bleed = { cycleStart, cycleEnd, predictedBleedDays, menstrual, ovulationDay };
+  const assertedEnd = minDate(bleedSpan.end, inputs.today);
+  const menstrual =
+    compareDates(assertedEnd, bleedSpan.start) < 0
+      ? undefined
+      : { start: bleedSpan.start, end: assertedEnd };
+  const bleed = {
+    cycleStart,
+    cycleEnd,
+    predictedBleedDays,
+    bleedSpan,
+    ...(menstrual === undefined ? {} : { menstrual }),
+    ovulationDay,
+  };
   if (state !== 'current') return bleed;
 
   const fertile = after(
@@ -279,7 +319,7 @@ function windowsFor(cycle: DerivedCycle, inputs: PhaseInputs, state: LogState): 
       start: addDays(ovulationDay, -FERTILE_DAYS_BEFORE_OVULATION),
       end: addDays(ovulationDay, FERTILE_DAYS_AFTER_OVULATION),
     },
-    menstrual.end
+    bleedSpan.end
   );
   const fertility =
     fertile !== undefined && isWithin(ovulationDay, fertile.start, fertile.end)
@@ -287,7 +327,7 @@ function windowsFor(cycle: DerivedCycle, inputs: PhaseInputs, state: LogState): 
       : undefined;
   const premenstrual = after(
     { start: addDays(cycleEnd, -PREMENSTRUAL_WINDOW_DAYS), end: addDays(cycleEnd, -1) },
-    fertility?.range.end ?? menstrual.end
+    fertility?.range.end ?? bleedSpan.end
   );
   return { ...bleed, fertility, premenstrual };
 }
@@ -318,7 +358,9 @@ function daysLateOn(inputs: PhaseInputs): number {
  * typed rather than to a predicted end: a start she logged, and an end she
  * logged when she recorded one. It says a bleed began on a day she typed in,
  * which stays true however long the silence after it runs, and `phaseForDate`
- * reports the same days the same way.
+ * reports the same days the same way. What is published is the part of it that
+ * has happened, never the whole span the windows were laid out around, and it is
+ * absent altogether in the one case where none of it has.
  */
 export function buildPhaseModel(inputs: PhaseInputs): PhaseModel {
   const base = {
@@ -334,14 +376,23 @@ export function buildPhaseModel(inputs: PhaseInputs): PhaseModel {
 
   const state = logStateOn(inputs, lastCycle);
   const windows = windowsFor(lastCycle, inputs, state);
+  // The bleed the engine will assert, never the span the windows were laid out
+  // around: publishing the span would put a period on days that have not
+  // happened, which is the one thing `windowsFor` separates the two values for.
+  const menstrualWindow = windows.menstrual;
   if (state === 'stale') {
-    return { ...base, menstrualWindow: windows.menstrual, isLate: false, isStale: true };
+    return {
+      ...base,
+      ...(menstrualWindow === undefined ? {} : { menstrualWindow }),
+      isLate: false,
+      isStale: true,
+    };
   }
 
   if (state === 'late') {
     return {
       ...base,
-      menstrualWindow: windows.menstrual,
+      ...(menstrualWindow === undefined ? {} : { menstrualWindow }),
       isLate: true,
       daysLate: daysLateOn(inputs),
       isStale: false,
@@ -352,7 +403,7 @@ export function buildPhaseModel(inputs: PhaseInputs): PhaseModel {
     estimatedOvulationDate: windows.fertility?.ovulationDay,
     fertileWindow: windows.fertility?.range,
     premenstrualWindow: windows.premenstrual,
-    menstrualWindow: windows.menstrual,
+    ...(menstrualWindow === undefined ? {} : { menstrualWindow }),
     isLate: false,
     isStale: false,
   };
@@ -523,13 +574,15 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  *
  * Ahead of all three sits the bleed of the cycle the date falls in, which is
  * decided first and the same way in every state: a date inside it reports
- * `menstrual`. That window ends where she logged the period ending, and only
- * where the learned length puts it when she logged no end, so a long logged
+ * `menstrual`. That bleed runs to where she logged the period ending, and only
+ * to where the learned length puts it when she logged no end, so a long logged
  * bleed is reported as the bleed she recorded rather than as the state of a
- * prediction it happens to run past. It ends at today when the end she logged is
- * later than that, so this is not a fourth way for a state to reach past today:
- * a date after today never reports `menstrual` on the strength of an entry, and
- * takes whatever phase the rule for the state gives it instead.
+ * prediction it happens to run past. It stops at today in both of those cases,
+ * so this is not a fourth way for a state to reach past today: a date after
+ * today never reports `menstrual`, on the strength of an entry or of an
+ * estimate, and takes whatever phase the rule for the state gives it instead.
+ * `windowsFor` draws that line, once, and lays the other windows out around the
+ * whole bleed rather than around the part of it that has happened.
  *
  * - While the log is `current`, every date up to the last day of the bleed the
  *   engine expects next reports a phase, and dates past that return undefined.
@@ -577,8 +630,9 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  * ended. It is also why the predicted bleed of a current log is its own phase
  * rather than `menstrual`: the engine is entitled to say a period is expected on
  * Tuesday, and not entitled to say she was bleeding on a Tuesday that has not
- * arrived. An end date typed for next Tuesday does not buy that entitlement
- * either, which is why the one bound on the logged bleed is today.
+ * arrived. Neither an end date typed for next Tuesday nor a learned length that
+ * reaches it buys that entitlement, which is why the one bound on the reported
+ * bleed is today.
  */
 export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate | undefined {
   const cycle = enclosingCycle(inputs.cycles, date);
@@ -595,7 +649,8 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
     fertilityIsEstimateNotContraception: true,
   } as const;
 
-  if (isWithin(date, windows.menstrual.start, windows.menstrual.end)) {
+  const menstrual = windows.menstrual;
+  if (menstrual !== undefined && isWithin(date, menstrual.start, menstrual.end)) {
     return {
       ...estimate,
       phase: 'menstrual',

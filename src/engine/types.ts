@@ -365,9 +365,12 @@ export interface PhaseModel {
    *
    * A logged end is taken at face value however implausible it is, so this can
    * be far longer than any real period and can leave no room for the other
-   * windows. It is not read past today, though: an end dated in the future is a
-   * claim about days that have not happened rather than a record of them, and
-   * the window stops at today until they arrive. See `docs/DECISIONS.md`.
+   * windows. It is not published past today, though: neither an end dated in
+   * the future nor a learned length reaching past today is a record of days
+   * that have not happened, so this window stops at today until they arrive,
+   * and is absent in the one case where none of the bleed has happened yet. The
+   * days it stops short of are still held back from every other window, since
+   * what she recorded is what those days are. See `docs/DECISIONS.md`.
    */
   menstrualWindow?: DateRange;
   /**
@@ -451,6 +454,22 @@ export interface FutureDatedStart {
   message: string;
 }
 
+/**
+ * A logged entry whose date is not a calendar date, left out of the derivation.
+ *
+ * One unreadable row does not make the rest of a history unreadable, so it is
+ * reported here rather than thrown, on the same terms as a future-dated start:
+ * the entry stays in the log exactly as it is, and a UI has a sentence for why
+ * a row she can see is not counted. `date` is whatever was stored, which is why
+ * it is not an `ISODate`.
+ */
+export interface InvalidLogEntry {
+  date: unknown;
+  kind: DayEntryKind;
+  /** Plain sentence the UI can show verbatim. */
+  message: string;
+}
+
 /** A gap the engine believes is two cycles with a missed start log. */
 export interface MissedLogSuspicion {
   cycleIndex: number;
@@ -477,6 +496,8 @@ export interface CycleAnalysis {
   missedLogSuspicions: readonly MissedLogSuspicion[];
   /** Logged starts dated after `today`, which no cycle here is derived from. */
   futureDatedStarts: readonly FutureDatedStart[];
+  /** Logged entries whose date could not be read, left out of the derivation. */
+  invalidEntries: readonly InvalidLogEntry[];
   confidence: number;
   confidenceTier: ConfidenceTier;
   personalized: boolean;

@@ -10,19 +10,12 @@ import { diffDays } from '../date';
 import { analyze, logFromStartDates } from '../index';
 import { learnPeriodLength } from '../phases';
 import { MAX_FITTABLE_PERIOD_LENGTH_DAYS, PERIOD_PRIOR_MEAN_DAYS } from '../constants';
-import { current } from './support';
+import { AFTER_EVERY_START, current } from './support';
 import type { CycleLog } from '../types';
 
 function startsOnly(dates: readonly string[]): CycleLog {
   return logFromStartDates(dates);
 }
-
-/**
- * Derivation reads today for one purpose: deciding which starts have happened.
- * Every fixture here is in the past by this date, so it takes them all. The
- * future-dated case below sets its own.
- */
-const AFTER_EVERY_START = '2024-12-31';
 
 describe('deriveCycles', () => {
   it('returns nothing for an empty log', () => {
@@ -72,9 +65,43 @@ describe('deriveCycles', () => {
     expect(cycles[0]?.lengthDays).toBe(28);
   });
 
-  it('rejects an invalid date in the log', () => {
-    const log: CycleLog = { version: 1, entries: [{ date: '2024-02-30', kind: 'period-start' }] };
-    expect(() => deriveCycles(log, AFTER_EVERY_START)).toThrow(RangeError);
+  it('leaves an entry whose date is not a calendar date out, and says so', () => {
+    // 2024-02-30 is not a day. One unreadable row is not a reason to hand back
+    // nothing at all, so it is reported on the same terms as a future-dated
+    // start: excluded from the derivation, left in the log, and named.
+    const log: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-05', kind: 'period-start' },
+        { date: '2024-02-30', kind: 'period-start' },
+        { date: '2024-02-02', kind: 'period-start' },
+        { date: 'yesterday', kind: 'period-end' },
+      ],
+    };
+    const { cycles, invalidEntries } = deriveCycles(log, AFTER_EVERY_START);
+    expect(cycles.map((cycle) => cycle.startDate)).toEqual(['2024-01-05', '2024-02-02']);
+    expect(cycles[0]?.endDate).toBeUndefined();
+    expect(invalidEntries.map((entry) => entry.date)).toEqual(['2024-02-30', 'yesterday']);
+    expect(invalidEntries.map((entry) => entry.kind)).toEqual(['period-start', 'period-end']);
+    expect(invalidEntries[0]?.message).toContain('2024-02-30');
+  });
+
+  it('analyses the rest of a log with an unreadable entry in it', () => {
+    // The reason the rule exists: one corrupt row in a persisted log used to
+    // take the whole analysis down, so she would have seen nothing rather than
+    // the history that is perfectly readable.
+    const log: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-05', kind: 'period-start' },
+        { date: '2024-02-30', kind: 'period-start' },
+        { date: '2024-02-02', kind: 'period-start' },
+      ],
+    };
+    const analysis = analyze(log, { today: '2024-02-10' });
+    expect(analysis.invalidEntries).toHaveLength(1);
+    expect(analysis.cycles).toHaveLength(2);
+    expect(analysis.prediction.lastStartDate).toBe('2024-02-02');
   });
 });
 
@@ -92,7 +119,7 @@ describe('logged end dates', () => {
     expect(cycles[0]?.endDate).toBe('2024-01-09');
     expect(cycles[0]?.periodLengthDays).toBe(5);
     expect(cycles[1]?.endDate).toBeUndefined();
-    expect(observedPeriodLengths(cycles)).toEqual([5]);
+    expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([5]);
   });
 
   it('ignores an end date that predates every start', () => {
@@ -105,12 +132,12 @@ describe('logged end dates', () => {
     };
     const { cycles } = deriveCycles(log, AFTER_EVERY_START);
     expect(cycles[0]?.endDate).toBeUndefined();
-    expect(observedPeriodLengths(cycles)).toEqual([]);
+    expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([]);
   });
 
   it('leaves period length absent when she only logs starts', () => {
     const { cycles } = deriveCycles(startsOnly(['2024-01-05', '2024-02-02']), AFTER_EVERY_START);
-    expect(observedPeriodLengths(cycles)).toEqual([]);
+    expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([]);
   });
 
   it('fits a long but plausible bleed', () => {
@@ -125,7 +152,9 @@ describe('logged end dates', () => {
     };
     const { cycles } = deriveCycles(log, AFTER_EVERY_START);
     expect(cycles[0]?.periodLengthDays).toBe(MAX_FITTABLE_PERIOD_LENGTH_DAYS);
-    expect(observedPeriodLengths(cycles)).toEqual([MAX_FITTABLE_PERIOD_LENGTH_DAYS]);
+    expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([
+      MAX_FITTABLE_PERIOD_LENGTH_DAYS,
+    ]);
   });
 
   it('keeps an implausible bleed in her history but out of the fit', () => {
@@ -145,7 +174,43 @@ describe('logged end dates', () => {
     expect(cycles[0]?.endDate).toBe('2024-01-26');
     expect(cycles[0]?.periodLengthDays).toBe(22);
     // Only the plausible one reaches the fit.
-    expect(observedPeriodLengths(cycles)).toEqual([5]);
+    expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([5]);
+  });
+
+  it('keeps an end dated after today in her history but out of the fit', () => {
+    // She starts on the 5th, means to log the end as the 5th of the next month
+    // and types the 15th of this one, two days out. Three days of bleeding
+    // counted as eleven is not an observation, and one of them biases the
+    // learned length upward for every cycle after it.
+    const log: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-03-05', kind: 'period-start' },
+        { date: '2024-03-15', kind: 'period-end' },
+      ],
+    };
+    const { cycles } = deriveCycles(log, '2024-03-07');
+    expect(cycles[0]?.endDate).toBe('2024-03-15');
+    expect(cycles[0]?.periodLengthDays).toBe(11);
+    expect(observedPeriodLengths(cycles, '2024-03-07')).toEqual([]);
+    // And it counts from the day it names, exactly as a future-dated start does.
+    expect(observedPeriodLengths(cycles, '2024-03-15')).toEqual([11]);
+  });
+
+  it('leaves the learned length at the prior rather than biased by that entry', () => {
+    const { cycles } = deriveCycles(
+      {
+        version: 1,
+        entries: [
+          { date: '2024-03-05', kind: 'period-start' },
+          { date: '2024-03-15', kind: 'period-end' },
+        ],
+      },
+      '2024-03-07'
+    );
+    const learned = learnPeriodLength(observedPeriodLengths(cycles, '2024-03-07'));
+    expect(learned.isPrior).toBe(true);
+    expect(learned.meanDays).toBe(PERIOD_PRIOR_MEAN_DAYS);
   });
 
   it('does not let one mistyped end date redefine the period length', () => {
@@ -161,7 +226,8 @@ describe('logged end dates', () => {
             ],
           },
           AFTER_EVERY_START
-        ).cycles
+        ).cycles,
+        AFTER_EVERY_START
       )
     );
     expect(typo.isPrior).toBe(true);
@@ -209,6 +275,47 @@ describe('a period start dated after today', () => {
     expect(analysis.prediction.lastStartDate).toBe('2024-01-29');
     expect(diffDays('2024-02-01', current(analysis.prediction).pointDate)).toBeGreaterThan(0);
     expect(analysis.currentPhase?.dayOfCycle).toBe(diffDays('2024-01-29', '2024-02-01') + 1);
+  });
+
+  it('leaves the end that belongs to it out with it', () => {
+    // She backfills the start with next year's digits and logs its end too. An
+    // end date belongs to the start it follows, so excluding the start has to
+    // exclude the end: the cycle before it never saw that bleed, and taking the
+    // entry onto it produced a 397 day period.
+    const withEnd: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-01', kind: 'period-start' },
+        { date: '2024-01-29', kind: 'period-start' },
+        { date: '2025-02-26', kind: 'period-start' },
+        { date: '2025-03-01', kind: 'period-end' },
+      ],
+    };
+    const { cycles, futureDatedStarts } = deriveCycles(withEnd, '2024-02-10');
+    expect(futureDatedStarts.map((start) => start.date)).toEqual(['2025-02-26']);
+    expect(cycles).toHaveLength(2);
+    expect(cycles[1]?.endDate).toBeUndefined();
+    expect(cycles[1]?.periodLengthDays).toBeUndefined();
+    expect(observedPeriodLengths(cycles, '2024-02-10')).toEqual([]);
+  });
+
+  it('still takes the end that really does belong to the last counted cycle', () => {
+    // The bound is on ends that fall after the excluded start, not on ends in
+    // general. Excluding one entry must not cost her the entry beside it.
+    const withEnd: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-01', kind: 'period-start' },
+        { date: '2024-01-29', kind: 'period-start' },
+        { date: '2024-02-02', kind: 'period-end' },
+        { date: '2025-02-26', kind: 'period-start' },
+        { date: '2025-03-01', kind: 'period-end' },
+      ],
+    };
+    const { cycles } = deriveCycles(withEnd, '2024-02-10');
+    expect(cycles[1]?.endDate).toBe('2024-02-02');
+    expect(cycles[1]?.periodLengthDays).toBe(5);
+    expect(observedPeriodLengths(cycles, '2024-02-10')).toEqual([5]);
   });
 
   it('reports nothing for a log that is entirely in the future', () => {

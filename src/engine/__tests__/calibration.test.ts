@@ -11,11 +11,8 @@ import {
 import { fitCycleLength } from '../cycleLength';
 import { nextStartEstimate } from '../prediction';
 import { analyze, logFromStartDates } from '../index';
-import { current } from './support';
+import { AFTER_EVERY_START, current } from './support';
 import type { CalibrationRecord } from '../types';
-
-/** Late enough that derivation takes every start in this file. */
-const AFTER_EVERY_START = '2024-12-31';
 
 function record(partial: Partial<CalibrationRecord> & { within80: boolean }): CalibrationRecord {
   return {
