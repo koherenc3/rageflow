@@ -448,25 +448,40 @@ describe('an end date logged for days that have not happened', () => {
     expect(expected?.dayOfCycle).toBe(2);
   });
 
-  it('publishes no fertility estimate over the days of it the engine stands behind', () => {
-    // The layout and the assertion read one span, so the bound on the projection
-    // lands on both. Every day of her entry that has arrived holds its ground
-    // whatever else the arithmetic wanted to put there, and so does every day of
-    // it the engine is still willing to carry forward. What it will not do is
-    // hold days back on the strength of a projection it would not otherwise
-    // make, so the fertile window resumes the day after that projection ends
-    // rather than eleven months later on a badly mistyped year.
-    const beforeTheEndArrives = buildPhaseModel(on('2024-03-10'));
-    const afterItHas = buildPhaseModel(on('2024-03-20'));
-    expect(afterItHas.fertileWindow).toBeUndefined();
-    expect(afterItHas.estimatedOvulationDate).toBeUndefined();
-    expect(beforeTheEndArrives.fertileWindow?.start).toBe(addDays(PROJECTED_THROUGH, 1));
-    for (const date of walkDates('2024-02-26', PROJECTED_THROUGH)) {
-      expect(phaseForDate(on('2024-03-10'), date)?.phase, date).not.toBe('fertile');
+  it('publishes no fertility estimate for this cycle at all', () => {
+    // Her entry records 24 days of bleeding, longer than any period the fit will
+    // accept, so the engine cannot say when this cycle's bleed ended. The
+    // ovulation estimate is read off the structure of the cycle and off nothing
+    // else, so a cycle whose structure cannot be read does not get one. That
+    // holds on both sides of the day her entry names: the calendar catching up
+    // with an entry cannot turn a cycle the engine could not read into one it
+    // can, and a fertility estimate that appears for ten days and then vanishes
+    // is the estimate contradicting itself rather than the engine correcting.
+    for (const today of ['2024-03-10', '2024-03-20']) {
+      const model = buildPhaseModel(on(today));
+      expect(model.fertileWindow, today).toBeUndefined();
+      expect(model.estimatedOvulationDate, today).toBeUndefined();
+      for (const date of walkDates('2024-02-26', '2024-03-24')) {
+        expect(phaseForDate(on(today), date)?.phase, `${today} ${date}`).not.toBe('fertile');
+      }
     }
-    for (const date of walkDates('2024-02-26', '2024-03-20')) {
-      expect(phaseForDate(on('2024-03-20'), date)?.phase, date).not.toBe('fertile');
-    }
+  });
+
+  it('is past the bleed the fit will accept, which is what withholds it', () => {
+    // Naming the trigger, so this block cannot be read as fertility being
+    // withheld for having an end date at all. A cycle whose recorded bleed sits
+    // inside the bound keeps its estimate: same start, same predicted end, an
+    // end date one day shorter than the bound.
+    const inside: DayEntry[] = [
+      ...starts.map((date): DayEntry => ({ date, kind: 'period-start' })),
+      { date: addDays('2024-02-26', MAX_FITTABLE_PERIOD_LENGTH_DAYS - 2), kind: 'period-end' },
+    ];
+    const derived = deriveCycles({ version: 1, entries: inside }, AFTER_EVERY_START);
+    expect(derived.cycles[2]?.periodLengthDays).toBe(MAX_FITTABLE_PERIOD_LENGTH_DAYS - 1);
+    expect(cycles[2]?.periodLengthDays as number).toBeGreaterThan(MAX_FITTABLE_PERIOD_LENGTH_DAYS);
+    const model = buildPhaseModel({ ...on('2024-03-10'), cycles: derived.cycles });
+    expect(model.estimatedOvulationDate).toBe(addDays('2024-03-25', -LUTEAL_PRIOR_MEAN_DAYS));
+    expect(model.fertileWindow).toBeDefined();
   });
 
   it('is a case where there really would have been a window to publish', () => {
@@ -480,17 +495,17 @@ describe('an end date logged for days that have not happened', () => {
     expect(diffDays(rawEnd, '2024-03-20')).toBeGreaterThan(0);
   });
 
-  it('lays the run-up out after the bleed and the fertile window either way', () => {
-    // The other window indexed backward from the cycle end, cut against the same
-    // span. Once the whole entry has arrived it begins the day after it. Before
-    // that the entry is carried only as far as the projection, and what is left
-    // of the fertile window ends before the run-up would start anyway, so the
-    // run-up keeps its natural place. Neither overlaps what came before it.
-    const early = buildPhaseModel(on('2024-03-10'));
-    expect(early.premenstrualWindow?.start).toBe(addDays('2024-03-25', -PREMENSTRUAL_WINDOW_DAYS));
-    expect(
-      diffDays(early.fertileWindow?.end as string, early.premenstrualWindow?.start as string)
-    ).toBeGreaterThan(0);
+  it('keeps the run-up, laid out after the bleed', () => {
+    // The other window indexed backward from the cycle end. It is not a
+    // fertility estimate, so the rule above does not reach it, and dropping it
+    // would put a hole in a month calendar for no reason the engine can state.
+    // With no fertile window to cut against it is cut against the same span the
+    // bleed occupies: its natural place while the entry is carried only as far
+    // as the projection, and the day after the entry once the whole of it has
+    // arrived.
+    expect(buildPhaseModel(on('2024-03-10')).premenstrualWindow?.start).toBe(
+      addDays('2024-03-25', -PREMENSTRUAL_WINDOW_DAYS)
+    );
     expect(buildPhaseModel(on('2024-03-20')).premenstrualWindow?.start).toBe('2024-03-21');
   });
 
@@ -560,16 +575,34 @@ describe('an end date mistyped into next year', () => {
     }
   });
 
-  it('still publishes the fertility estimate her entry would have swallowed', () => {
-    // The layout reads the same bounded span, so the suppression stops where the
-    // projection does. A typo that reaches eleven months forward must not take
-    // the fertile window and the ovulation estimate with it for that long.
+  it('publishes no fertility estimate for the cycle carrying the typo', () => {
+    // The entry says this bleed is still running eleven months out, so the
+    // engine has no reading of when it ended and no cycle structure to time an
+    // ovulation against. It withholds the estimate rather than placing one in
+    // the gap its own bound opens up, which is the answer it already gives
+    // whenever it stops trusting its inputs.
     const model = buildPhaseModel(inputs);
     const ovulation = addDays(PREDICTED_NEXT_START, -LUTEAL_PRIOR_MEAN_DAYS);
-    expect(model.estimatedOvulationDate).toBe(ovulation);
-    expect(model.fertileWindow?.end).toBe(addDays(ovulation, FERTILE_DAYS_AFTER_OVULATION));
+    expect(model.fertileWindow).toBeUndefined();
+    expect(model.estimatedOvulationDate).toBeUndefined();
+    expect(phaseForDate(inputs, ovulation)?.phase).not.toBe('fertile');
+    for (const date of walkDates('2024-01-29', addDays(PREDICTED_NEXT_START, -1))) {
+      expect(phaseForDate(inputs, date)?.phase, date).not.toBe('fertile');
+    }
+  });
+
+  it('holds nothing else back for as long as the typo runs', () => {
+    // The containment, which is the reason the suppression above is affordable:
+    // it is one cycle's estimate, not eleven months of blanked output. The
+    // run-up still sits where the predicted start puts it, the days past the
+    // projection take their ordinary phase, and the next start she logs starts a
+    // cycle the engine can read again.
+    const model = buildPhaseModel(inputs);
     expect(model.premenstrualWindow?.end).toBe(addDays(PREDICTED_NEXT_START, -1));
-    expect(phaseForDate(inputs, ovulation)?.phase).toBe('fertile');
+    expect(model.premenstrualWindow?.start).toBe(
+      addDays(PREDICTED_NEXT_START, -PREMENSTRUAL_WINDOW_DAYS)
+    );
+    expect(phaseForDate(inputs, '2024-02-20')?.phase).toBe('luteal');
   });
 });
 

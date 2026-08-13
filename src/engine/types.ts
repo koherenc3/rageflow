@@ -375,10 +375,12 @@ export interface PhaseModel {
    */
   estimatedOvulationDate?: ISODate;
   /**
-   * Absent while late or stale, and absent in the rare case where the bleed
-   * covers every day of it, which is the same days `phaseForDate` calls
-   * `menstrual`. Whenever it is absent `phaseForDate` reports no day of this
-   * cycle as `fertile`.
+   * Absent while late or stale, absent in the rare case where the bleed of this
+   * cycle covers every day of it, and absent for a cycle whose recorded bleed
+   * runs longer than the fit will accept, where the engine cannot read when that
+   * bleed ended and so has no cycle structure to time an ovulation off.
+   * `windowsFor` lays those rules out and is the one statement of them. Whenever
+   * this is absent `phaseForDate` reports no day of this cycle as `fertile`.
    */
   fertileWindow?: DateRange;
   /** Absent while late or stale, and absent if an earlier window covers it. */
@@ -395,10 +397,13 @@ export interface PhaseModel {
    * windows. It is not published past today, though: neither an end dated in
    * the future nor a learned length reaching past today is a record of days
    * that have not happened, so this window stops at today until they arrive,
-   * and is absent in the one case where none of the bleed has happened yet. The
-   * days it stops short of are still held back from every other window, since
-   * what she recorded is what those days are, and `phaseForDate` reports them as
-   * `predicted-menstrual` until they arrive. See `docs/DECISIONS.md`.
+   * and is absent in the one case where none of the bleed has happened yet.
+   *
+   * How far past today the bleed is carried at all, which of the days it stops
+   * short of are held back from the other windows, and what `phaseForDate`
+   * reports those days as are one rule, stated in `windowsFor` and in the
+   * contract on `phaseForDate`. This defers to them rather than restating it,
+   * because a second copy is a second thing that can go stale.
    */
   menstrualWindow?: DateRange;
   /**

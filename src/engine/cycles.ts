@@ -137,6 +137,16 @@ export interface DerivationResult {
  * the boundary it provided hands its end to the last cycle that was kept, which
  * is how a mistyped year once produced a 397 day period. `firstFutureStart` is
  * that boundary, kept after the start itself is dropped.
+ *
+ * That is a rule about excluded starts rather than about future-dated ones, so
+ * the other exclusion gets it too. A start left out for not being a calendar
+ * date leaves the same hole and no date to fill it with: nothing in the log says
+ * whether it sat before or after the ends that follow the last accepted start.
+ * The boundary is preserved as unknown rather than dropped, so the last accepted
+ * cycle takes no end rather than taking one that may have belonged to the start
+ * left out. Only that cycle can be reached, because every other one is bounded
+ * by a start of its own. The end itself is untouched, on the same terms as every
+ * other entry the derivation cannot place: still in the log, never rewritten.
  */
 export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
   const invalidEntries: InvalidLogEntry[] = [];
@@ -158,6 +168,8 @@ export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
   // Sorted, so the first excluded start is the earliest of them and the last
   // accepted cycle stops there rather than running to the end of the log.
   const firstFutureStart = futureDatedStarts[0]?.date;
+  // The same boundary from a start that has no readable date to provide one.
+  const hasUnplaceableStart = invalidEntries.some((entry) => entry.kind === 'period-start');
 
   const cycles: DerivedCycle[] = [];
   const missedLogSuspicions: MissedLogSuspicion[] = [];
@@ -170,13 +182,18 @@ export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
     // The logged end that belongs to this cycle: on or after the start, and
     // strictly before the next one she logged, whether or not that next start
     // was counted as a cycle. Anything else is a stray entry, or belongs to a
-    // start this derivation left out.
+    // start this derivation left out. With an excluded start that has no
+    // readable date there is no telling which of the two an end after this
+    // start is, so this cycle takes none.
     const endBoundary = nextStartDate ?? firstFutureStart;
-    const endDate = ends.find(
-      (candidate) =>
-        compareDates(candidate, startDate) >= 0 &&
-        (endBoundary === undefined || compareDates(candidate, endBoundary) < 0)
-    );
+    const boundaryIsUnknown = nextStartDate === undefined && hasUnplaceableStart;
+    const endDate = boundaryIsUnknown
+      ? undefined
+      : ends.find(
+          (candidate) =>
+            compareDates(candidate, startDate) >= 0 &&
+            (endBoundary === undefined || compareDates(candidate, endBoundary) < 0)
+        );
     const periodLengthDays = endDate === undefined ? undefined : diffDays(startDate, endDate) + 1;
 
     if (nextStartDate === undefined) {

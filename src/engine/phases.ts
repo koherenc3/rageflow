@@ -267,6 +267,18 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  * estimate across all of them. Both uses read the one bounded span, so neither
  * can be bounded without the other.
  *
+ * Bounding the span leaves the days past the bound holding nothing back, and a
+ * fertility estimate published across days her entry names as a period is the
+ * one thing this whole layout exists to stop. So a cycle whose recorded bleed
+ * runs past that bound gets no fertility estimate at all: `bleedEndIsUnreadable`
+ * drops it whole, before the cut is taken. If the engine cannot tell when her
+ * period ended it cannot read the structure of that cycle, and the ovulation
+ * estimate is read off nothing but that structure, so there is no estimate to
+ * make. Withholding it is the same answer `late` and `stale` already give when
+ * the engine stops trusting its own inputs, and it fails in the same direction.
+ * Only the cycle carrying the entry is affected, and only until she logs the
+ * next start.
+ *
  * So the days between today and the end of the span are laid out as bleed and
  * reported as `predicted-menstrual` until they arrive: a bleed day the engine
  * expects rather than one she recorded, which is what a day of her entry that
@@ -316,14 +328,16 @@ function windowsFor(cycle: DerivedCycle, inputs: PhaseInputs, state: LogState): 
     loggedEnd === undefined
       ? addDays(cycleStart, predictedBleedDays - 1)
       : maxDate(cycleStart, loggedEnd);
-  const projectionEnd = minDate(
-    addDays(cycleStart, MAX_FITTABLE_PERIOD_LENGTH_DAYS - 1),
-    addDays(cycleEnd, -1)
-  );
+  const plausibleBleedEnd = addDays(cycleStart, MAX_FITTABLE_PERIOD_LENGTH_DAYS - 1);
+  const projectionEnd = minDate(plausibleBleedEnd, addDays(cycleEnd, -1));
   const bleedSpan = {
     start: cycleStart,
     end: minDate(recordedEnd, maxDate(inputs.today, projectionEnd)),
   };
+  // A bleed recorded as running longer than the fit will accept is one the
+  // engine cannot read the end of, so this cycle gets no fertility estimate at
+  // all. See the paragraph on it above.
+  const bleedEndIsUnreadable = compareDates(recordedEnd, plausibleBleedEnd) > 0;
   const assertedEnd = minDate(bleedSpan.end, inputs.today);
   const menstrual =
     compareDates(assertedEnd, bleedSpan.start) < 0
@@ -339,13 +353,15 @@ function windowsFor(cycle: DerivedCycle, inputs: PhaseInputs, state: LogState): 
   };
   if (state !== 'current') return bleed;
 
-  const fertile = after(
-    {
-      start: addDays(ovulationDay, -FERTILE_DAYS_BEFORE_OVULATION),
-      end: addDays(ovulationDay, FERTILE_DAYS_AFTER_OVULATION),
-    },
-    bleedSpan.end
-  );
+  const fertile = bleedEndIsUnreadable
+    ? undefined
+    : after(
+        {
+          start: addDays(ovulationDay, -FERTILE_DAYS_BEFORE_OVULATION),
+          end: addDays(ovulationDay, FERTILE_DAYS_AFTER_OVULATION),
+        },
+        bleedSpan.end
+      );
   const fertility =
     fertile !== undefined && isWithin(ovulationDay, fertile.start, fertile.end)
       ? { range: fertile, ovulationDay }
@@ -481,10 +497,11 @@ function menstrualSummary(dayOfCycle: number): string {
  * range and stays available whether or not the estimate itself can be published.
  * They are not the only two phases reachable with no fertile window. `menstrual`
  * always is, decided before this function is reached, and so is `premenstrual`
- * on a cycle short enough that the bleed swallowed the fertile window, because
- * that cut takes the window it collides with and leaves the run-up alone. It is
- * `late` that drops both windows together, so only there does having no fertile
- * window mean having no premenstrual one. The wording here names the fertile
+ * on a cycle short enough that the bleed swallowed the fertile window, or one
+ * whose recorded bleed the engine could not read the end of, because both of
+ * those take the fertile window and leave the run-up alone. It is `late` that
+ * drops both windows together, so only there does having no fertile window mean
+ * having no premenstrual one. The wording here names the fertile
  * window only when there is one to name.
  */
 function describeCycleDay(

@@ -103,6 +103,50 @@ describe('deriveCycles', () => {
     expect(analysis.cycles).toHaveLength(2);
     expect(analysis.prediction.lastStartDate).toBe('2024-02-02');
   });
+
+  it('leaves an end that an unreadable start may own off the last cycle', () => {
+    // The same rule the excluded future-dated start gets, on the exclusion that
+    // has no date to bound with. She meant to backfill a start on 2024-02-26 and
+    // logged its end; the start is unreadable, so nothing in the log says
+    // whether it sat before or after 2024-03-01. Attributing that end to the
+    // cycle before it invents a bleed she never recorded on it, which is how a
+    // future-dated start once produced a 397 day period.
+    const log: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-01', kind: 'period-start' },
+        { date: '2024-01-29', kind: 'period-start' },
+        { date: 'not-a-date', kind: 'period-start' },
+        { date: '2024-03-01', kind: 'period-end' },
+      ],
+    };
+    const { cycles, invalidEntries } = deriveCycles(log, AFTER_EVERY_START);
+    expect(invalidEntries.map((entry) => entry.date)).toEqual(['not-a-date']);
+    expect(cycles).toHaveLength(2);
+    expect(cycles[1]?.endDate).toBeUndefined();
+    expect(cycles[1]?.periodLengthDays).toBeUndefined();
+    expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([]);
+  });
+
+  it('still gives every cycle bounded by a real start the end that falls in it', () => {
+    // The reach of that rule. Only the last cycle has no start of its own to
+    // stop at, so only it can be handed an end belonging to a start that was
+    // left out. One unreadable row must not cost her the ends she logged on the
+    // cycles either side of it.
+    const log: CycleLog = {
+      version: 1,
+      entries: [
+        { date: '2024-01-05', kind: 'period-start' },
+        { date: '2024-01-09', kind: 'period-end' },
+        { date: 'not-a-date', kind: 'period-start' },
+        { date: '2024-02-02', kind: 'period-start' },
+      ],
+    };
+    const { cycles } = deriveCycles(log, AFTER_EVERY_START);
+    expect(cycles[0]?.endDate).toBe('2024-01-09');
+    expect(cycles[0]?.periodLengthDays).toBe(5);
+    expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([5]);
+  });
 });
 
 describe('logged end dates', () => {
