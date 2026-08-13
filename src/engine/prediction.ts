@@ -156,6 +156,7 @@ export function describePrediction(
     confidence: estimate.confidence,
     confidenceTier: estimate.confidenceTier,
     personalized: estimate.personalized,
+    coldStartMessage: history,
   };
 
   if (lastStartDate !== undefined && compareDates(today, estimate.validThrough) > 0) {

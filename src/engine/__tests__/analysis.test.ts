@@ -88,6 +88,14 @@ describe('analyze', () => {
     expect(analysis.coldStartMessage).toMatch(/5 cycles/);
   });
 
+  it('says the same thing about her history in both places it says it', () => {
+    // The analysis field and the sentence appended to the prediction summary are
+    // one string, computed once, rather than two derivations of the same inputs
+    // that happen to agree today.
+    expect(analysis.prediction.coldStartMessage).toBe(analysis.coldStartMessage);
+    expect(analysis.prediction.summary).toContain(analysis.coldStartMessage);
+  });
+
   it('gives every fertility output the not-contraception flag', () => {
     expect(analysis.phases.fertilityIsEstimateNotContraception).toBe(true);
     expect(analysis.currentPhase?.fertilityIsEstimateNotContraception).toBe(true);

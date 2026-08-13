@@ -24,7 +24,6 @@ import { fitCycleLength } from './cycleLength';
 import { buildCalibration } from './calibration';
 import { describePrediction, nextStartEstimate, type DescribeNextStartInput } from './prediction';
 import { buildPhaseModel, learnLutealLength, learnPeriodLength, phaseForDate } from './phases';
-import { coldStartMessage } from './confidence';
 import type { CycleAnalysis, CycleLog, DayEntry } from './types';
 import type { PhaseInputs } from './phases';
 
@@ -93,11 +92,9 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
     confidence,
     confidenceTier,
     personalized,
-    coldStartMessage: coldStartMessage(
-      lengths.length,
-      cycles.length,
-      posterior.predictive.standardDeviation
-    ),
+    // Read off the prediction, which already appended it to its own summary, so
+    // the two sentences cannot drift into disagreeing about the same history.
+    coldStartMessage: prediction.coldStartMessage,
   };
 }
 

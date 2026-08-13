@@ -277,17 +277,38 @@ function cycleSummary(phase: CycleWindowPhase, windows: CycleWindows, dayOfCycle
  * logged. They never reach for a reason. She may be late, she may have missed a
  * log, she may be pregnant, and start dates cannot tell those apart, so naming
  * one or hinting at one would be the app guessing at her life.
+ *
+ * Both are also statements about the day being asked about rather than about
+ * today. Every day count in them is measured from that day, and the wording that
+ * says "today" is used only when the two are the same day. The `late` state
+ * reaches days other than today, so a sentence carrying today's count onto one of
+ * them would put two frames of reference in one line: a cell for the day after
+ * the estimate reading "6 days past" beside a day number that is its own.
+ * `PhaseEstimate.daysLate` stays measured to today, because being late is a state
+ * of the log rather than a property of a day, and it is documented as such.
  */
-function lateSummary(daysLate: number, windows: CycleWindows, dayOfCycle: number): string {
-  if (daysLate === 0) {
-    return `Your period is due today, ${windows.cycleEnd}. Nothing logged yet. Day ${dayOfCycle}, counting from your last logged start on ${windows.cycleStart}.`;
+function lateSummary(
+  windows: CycleWindows,
+  dayOfCycle: number,
+  daysPastEstimate: number,
+  isToday: boolean
+): string {
+  if (daysPastEstimate === 0) {
+    return isToday
+      ? `Your period is due today, ${windows.cycleEnd}. Nothing logged yet. Day ${dayOfCycle}, counting from your last logged start on ${windows.cycleStart}.`
+      : `Your period was expected on ${windows.cycleEnd} and nothing was logged. Day ${dayOfCycle}, counting from your last logged start on ${windows.cycleStart}.`;
   }
-  const days = daysLate === 1 ? '1 day' : `${daysLate} days`;
+  const days = daysPastEstimate === 1 ? '1 day' : `${daysPastEstimate} days`;
   return `${days} past the ${windows.cycleEnd} estimate, with no period start logged since ${windows.cycleStart}. Day ${dayOfCycle} counting from that start.`;
 }
 
-function staleSummary(windows: CycleWindows, today: ISODate): string {
-  return `Your last logged period start was ${windows.cycleStart}, ${diffDays(windows.cycleStart, today)} days ago, which is further back than this estimate reaches. There is no current cycle to report. Log a period start, either one you missed or your next one, and this will pick up again.`;
+function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): string {
+  const gapDays = diffDays(windows.cycleStart, date);
+  const resume =
+    'Log a period start, either one you missed or your next one, and this will pick up again.';
+  return isToday
+    ? `Your last logged period start was ${windows.cycleStart}, ${gapDays} days ago, which is further back than this estimate reaches. There is no current cycle to report. ${resume}`
+    : `Your last logged period start was ${windows.cycleStart}, ${gapDays} days before this day, and nothing was logged after it, so there is no cycle to place this day in. ${resume}`;
 }
 
 function classify(date: ISODate, windows: CycleWindows): CycleWindowPhase {
@@ -303,22 +324,32 @@ function classify(date: ISODate, windows: CycleWindows): CycleWindowPhase {
  * Returns undefined before the first logged start, and past the end of what the
  * current model describes, where there is genuinely nothing to say.
  *
- * `late` and `stale` describe today, not the date being asked about, so a
- * calendar drawing next month off this function gets ordinary phases for those
- * days while today gets the one honest answer about the state of the log. Dates
- * before the predicted start are never touched by either state.
+ * `late` and `stale` are read off today, never off the date being asked about, so
+ * a calendar querying next Tuesday is not evidence that anything has stopped.
+ * What each state then reaches is different, and the difference is the point.
  *
- * From the predicted start onward the two states do reach past today, and both
- * exceptions are deliberate. The predicted bleed is the only thing this function
- * claims past that date, since a cycle whose start has not happened cannot place
- * anything after it, and once today is `late` that bleed is a period the engine
- * predicted and then watched not arrive, so those days report `late` too rather
- * than being painted onto a calendar as a period she never logged. Once the log
- * is stale the predicted windows are withheld for every date in the in-progress
- * cycle, not only for today, because they belong to a cycle that did not happen
- * and offering them per-day would be the fertile window suppression undone one
- * cell at a time. What survives in both states is the bleed anchored to the real
- * logged start, which is what `buildPhaseModel` keeps as `menstrualWindow`.
+ * `late` reaches forward only, and dates before the predicted start keep their
+ * ordinary phase, because nothing has contradicted them: the cycle ran as
+ * predicted right up to the day the period was due. Past that date it does reach
+ * beyond today. The predicted bleed is the only thing this function claims there,
+ * since a cycle whose start has not happened cannot place anything after it, and
+ * once today is `late` that bleed is a period the engine predicted and then
+ * watched not arrive, so those days report `late` too rather than being painted
+ * onto a calendar as a period she never logged.
+ *
+ * `stale` reaches backward as well, over every date in the in-progress cycle,
+ * and the wider reach is deliberate. Once the silence has run past everything the
+ * model can account for, the follicular and fertile readings for those days were
+ * indexed off a predicted cycle end that is now known not to have held, so
+ * offering them as ordinary phases would be handing back a falsified prediction
+ * one calendar cell at a time, which is the fertile window suppression undone.
+ * Forward it stops at today: a model with no credible cycle end has nothing to
+ * say about tomorrow, so a consumer drawing next month gets undefined cells there
+ * exactly as it does past the predicted bleed while the log is current.
+ *
+ * What survives both states is the bleed anchored to the real logged start, which
+ * is what `buildPhaseModel` keeps as `menstrualWindow`. A logged bleed is a fact
+ * and a predicted window is not, and that is the whole rule.
  */
 export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate | undefined {
   const cycle = enclosingCycle(inputs.cycles, date);
@@ -349,17 +380,26 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
         summary: cycleSummary('menstrual', windows, dayOfCycle),
       };
     }
-    return { ...estimate, phase: 'stale', summary: staleSummary(windows, inputs.today) };
+    if (compareDates(date, inputs.today) > 0) return undefined;
+    return {
+      ...estimate,
+      phase: 'stale',
+      summary: staleSummary(windows, date, date === inputs.today),
+    };
   }
 
   if (state === 'late' && (date === inputs.today || withinPredictedBleed)) {
-    const daysLate = daysLateOn(inputs);
     return {
       ...estimate,
       phase: 'late',
       dayOfCycle,
-      daysLate,
-      summary: lateSummary(daysLate, windows, dayOfCycle),
+      daysLate: daysLateOn(inputs),
+      summary: lateSummary(
+        windows,
+        dayOfCycle,
+        diffDays(windows.cycleEnd, date),
+        date === inputs.today
+      ),
     };
   }
 

@@ -156,6 +156,13 @@ interface NextStartPredictionCommon {
   confidence: number;
   confidenceTier: ConfidenceTier;
   personalized: boolean;
+  /**
+   * Sentence describing how much history this prediction rests on, already
+   * included at the end of `summary`. Carried as its own field so a consumer, and
+   * `CycleAnalysis`, can read it off the prediction instead of deriving it a
+   * second time from the same inputs and risking two different sentences.
+   */
+  coldStartMessage: string;
   /** Plain sentence the UI can show verbatim. */
   summary: string;
 }
@@ -269,7 +276,9 @@ export interface PhaseEstimate {
    * Days from the predicted start to today, 0 on the predicted day itself.
    * Present only when `phase` is `late`. It counts to today and not to `date`
    * even when the two differ, because being late is a state of the log rather
-   * than a property of the day being asked about.
+   * than a property of the day being asked about. `summary` is the other way
+   * round: it describes `date`, so its day counts are measured from `date` and
+   * can differ from this field on any day that is not today.
    */
   daysLate?: number;
   confidence: number;

@@ -315,6 +315,37 @@ describe('a period that is late', () => {
     expect(phaseForDate(inputs, '2024-03-30')).toBeUndefined();
   });
 
+  it('counts the summary from the day it describes rather than from today', () => {
+    // Today is 6 days past the estimate, but 2024-03-26 is one day past it, and
+    // the sentence is about that day. Three calendar cells each claiming "6 days
+    // past" beside three different day numbers is two frames in one line.
+    const estimate = phaseForDate(on('2024-03-31'), '2024-03-26');
+    expect(estimate?.summary).toMatch(/^1 day past the 2024-03-25 estimate/);
+    expect(estimate?.summary).toContain(`Day ${diffDays('2024-02-26', '2024-03-26') + 1} `);
+    // The field stays a count to today, because being late is a state of the log.
+    expect(estimate?.daysLate).toBe(6);
+  });
+
+  it('does not call the predicted day due today once today is past it', () => {
+    const estimate = phaseForDate(on('2024-03-31'), '2024-03-25');
+    expect(estimate?.summary).not.toMatch(/due today/i);
+    expect(estimate?.summary).toMatch(/^Your period was expected on 2024-03-25/);
+  });
+
+  it('keeps the due-today wording for today and nothing else', () => {
+    // Today is the predicted day, so today is 0 days past the estimate. A later
+    // day inside the predicted bleed is 2 days past it and must not borrow
+    // today's sentence, which would read "due today" on a day that is not today.
+    const inputs = on('2024-03-25');
+    expect(phaseForDate(inputs, '2024-03-25')?.summary).toMatch(/due today/i);
+    const later = phaseForDate(inputs, '2024-03-27');
+    expect(later?.phase).toBe('late');
+    expect(later?.summary).not.toMatch(/due today/i);
+    expect(later?.summary).toMatch(/^2 days past the 2024-03-25 estimate/);
+    expect(later?.summary).toContain(`Day ${diffDays('2024-02-26', '2024-03-27') + 1} `);
+    expect(later?.daysLate).toBe(0);
+  });
+
   it('claims it again the moment the period is only due rather than overdue', () => {
     // The day before the estimate nothing has been contradicted yet, so a
     // forward-looking question about the predicted bleed still gets an answer.
@@ -395,6 +426,26 @@ describe('a log that has gone stale', () => {
     const inputs = on('2024-08-01');
     expect(phaseForDate(inputs, '2024-01-16')?.phase).toBe('fertile');
     expect(phaseForDate(inputs, '2024-01-01')?.phase).toBe('menstrual');
+  });
+
+  it('stops at today instead of labelling next month stale', () => {
+    // The bound the current path already has. A stale model has no credible
+    // cycle end, so it has nothing to say about tomorrow, and a consumer drawing
+    // next month gets empty cells rather than 31 of them each claiming a state.
+    const inputs = on('2024-08-01');
+    expect(phaseForDate(inputs, '2024-08-01')?.phase).toBe('stale');
+    expect(phaseForDate(inputs, '2024-08-02')).toBeUndefined();
+    expect(phaseForDate(inputs, '2024-09-15')).toBeUndefined();
+    expect(phaseForDate(inputs, '2026-01-01')).toBeUndefined();
+  });
+
+  it('describes the day it was asked about rather than today', () => {
+    const estimate = phaseForDate(on('2024-08-01'), '2024-03-12');
+    expect(estimate?.phase).toBe('stale');
+    expect(estimate?.summary).toContain(
+      `${diffDays('2024-02-26', '2024-03-12')} days before this day`
+    );
+    expect(estimate?.summary).not.toContain('days ago');
   });
 
   it('keeps the logged bleed but withholds the predicted windows of the stale cycle', () => {
