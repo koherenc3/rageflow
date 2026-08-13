@@ -153,7 +153,9 @@ interface CycleWindows {
    * The span the bleed of this cycle occupies: from the logged start to the
    * logged end when she recorded one, and to the learned length when she did
    * not. Every other window of this cycle is laid out around it and it is never
-   * published, because it can name days that have not happened.
+   * published, because it can name days that have not happened. The days it
+   * names that have not happened report `predicted-menstrual`, which is the
+   * phase for a bleed day the engine expects rather than one it was told about.
    */
   bleedSpan: DateRange;
   /**
@@ -249,12 +251,13 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  *   the future, and a logged fact about the future is not a fact.
  *
  * So the days between today and the end of the span are laid out as bleed and
- * reported as whatever phase is left once the bleed is ruled out, until they
- * arrive. Her entry is not altered by any of that, and the day it names becomes
- * a period day the moment it comes round. The same cut applies to a cycle she
- * logged no end for, where the span is the learned length: that end is an
- * estimate rather than an entry, which is if anything less of a licence to say
- * she was bleeding on a day that has not happened.
+ * reported as `predicted-menstrual` until they arrive: a bleed day the engine
+ * expects rather than one she recorded, which is what a day of her entry that
+ * has not happened is. Her entry is not altered by any of that, and the day it
+ * names becomes a period day the moment it comes round. The same cut applies to
+ * a cycle she logged no end for, where the span is the learned length: that end
+ * is an estimate rather than an entry, which is if anything less of a licence to
+ * say she was bleeding on a day that has not happened.
  *
  * The bleed is indexed forward from the cycle start and the fertile window
  * backward from the cycle end, so on a short cycle with a long period the two
@@ -427,10 +430,11 @@ function enclosingCycle(cycles: readonly DerivedCycle[], date: ISODate): Derived
 /**
  * The phases left once the bleed has been ruled out.
  *
- * `menstrual` is decided before anything else in `phaseForDate`, in one place,
- * so it cannot be reached here. `late` and `stale` are states of the log rather
- * than of the cycle, and `predicted-menstrual` is a bleed the engine expects
- * rather than one it has been told about, so none of those three is reachable
+ * The bleed is decided before anything else in `phaseForDate`, in one place, so
+ * neither `menstrual` nor the `predicted-menstrual` tail of the same span can be
+ * reached here. `late` and `stale` are states of the log rather than of the
+ * cycle, and the rest of `predicted-menstrual` is the bleed the engine expects
+ * next rather than one it has been told about, so none of those is reachable
  * from the windows either and each has its own wording below.
  */
 type CycleWindowPhase = Exclude<CyclePhase, 'menstrual' | 'late' | 'stale' | 'predicted-menstrual'>;
@@ -512,6 +516,26 @@ function predictedBleedSummary(expectedStart: ISODate, dayOfBleed: number): stri
 }
 
 /**
+ * A day of the bleed of the cycle she is in, which the span reaches past today.
+ *
+ * The same phase as the sentence above and a different provenance, which is what
+ * the wording carries: this day belongs to a period whose start she typed in,
+ * rather than to one the engine is expecting from a cycle length. Naming that
+ * start is the whole difference, and it is as far as the sentence goes. Her
+ * entry says the bleed runs to a day that has not arrived, and an entry about a
+ * day that has not happened is still not a record of it, so this says the day is
+ * expected rather than that she is bleeding on it.
+ *
+ * It reads the same way for a cycle she logged no end for, where the span is the
+ * learned length. That is a weaker claim about the same days and the sentence
+ * does not have to distinguish it: neither version asserts the bleed, and both
+ * name the start it is counted from, which is hers in both cases.
+ */
+function continuingBleedSummary(loggedStart: ISODate, dayOfCycle: number): string {
+  return `Day ${dayOfCycle} of the period you logged starting on ${loggedStart}. This day has not arrived yet, so it is still expected rather than a day you have recorded bleeding on.`;
+}
+
+/**
  * Both of these say only what the engine knows: a date passed and nothing was
  * logged. They never reach for a reason. She may be late, she may have missed a
  * log, she may be pregnant, and start dates cannot tell those apart, so naming
@@ -573,31 +597,40 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  * publishes no window for it either way. `PhaseModel` states that division.
  *
  * Ahead of all three sits the bleed of the cycle the date falls in, which is
- * decided first and the same way in every state: a date inside it reports
+ * decided first and the same way in every state, and which of its two answers a
+ * date gets is decided by today alone. A date inside it that has arrived reports
  * `menstrual`. That bleed runs to where she logged the period ending, and only
  * to where the learned length puts it when she logged no end, so a long logged
  * bleed is reported as the bleed she recorded rather than as the state of a
  * prediction it happens to run past. It stops at today in both of those cases,
  * so this is not a fourth way for a state to reach past today: a date after
  * today never reports `menstrual`, on the strength of an entry or of an
- * estimate, and takes whatever phase the rule for the state gives it instead.
- * `windowsFor` draws that line, once, and lays the other windows out around the
- * whole bleed rather than around the part of it that has happened.
+ * estimate. `windowsFor` draws that line, once, and lays the other windows out
+ * around the whole bleed rather than around the part of it that has happened.
+ *
+ * The days between today and the end of that span report `predicted-menstrual`,
+ * in every state, with `predictedBleedBasis` of `continues-logged-bleed`. They
+ * are days of a bleed that has not happened, so they cannot be `menstrual`, and
+ * they are days the layout has reserved as bleed, so nothing else may claim
+ * them either: leaving them to the follicular or luteal split would have the
+ * engine contradict an entry she typed in herself.
  *
  * - While the log is `current`, every date up to the last day of the bleed the
  *   engine expects next reports a phase, and dates past that return undefined.
- *   Days from the predicted start onward report `predicted-menstrual`, which is
- *   the one forward-looking claim this function makes and is named so it cannot
- *   be read as a bleed she logged.
+ *   Days from the predicted start onward report `predicted-menstrual` with a
+ *   basis of `expected-next-bleed`, which with the continuation above is the
+ *   whole of what this function claims about days that have not happened, and is
+ *   named so neither can be read as a bleed she logged.
  * - While today is `late`, dates from the predicted start through today report
- *   `late`, dates after today return undefined, and dates between the last
- *   logged start and the predicted start keep their ordinary phase, read off the
- *   windows the model still holds. It holds no fertile or premenstrual window
- *   while late, so those days of this cycle come back `menstrual`, `follicular`
- *   or `luteal` and never `fertile` or `premenstrual`.
+ *   `late`, dates after today return undefined unless the bleed span reaches
+ *   them, and dates between the last logged start and the predicted start keep
+ *   their ordinary phase, read off the windows the model still holds. It holds
+ *   no fertile or premenstrual window while late, so those days of this cycle
+ *   come back `menstrual`, `follicular` or `luteal` and never `fertile` or
+ *   `premenstrual`.
  * - While today is `stale`, dates from the last logged start through today report
  *   `stale` except inside the logged bleed, which reports `menstrual`, and dates
- *   after today return undefined.
+ *   after today return undefined on the same terms.
  *
  * Neither `late` nor `stale` reaches past today, because a cycle whose start has
  * not happened cannot place anything after it, and a model with no credible cycle
@@ -659,6 +692,17 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
     };
   }
 
+  const bleedSpan = windows.bleedSpan;
+  if (isWithin(date, bleedSpan.start, bleedSpan.end)) {
+    return {
+      ...estimate,
+      phase: 'predicted-menstrual',
+      dayOfCycle,
+      predictedBleedBasis: 'continues-logged-bleed',
+      summary: continuingBleedSummary(windows.cycleStart, dayOfCycle),
+    };
+  }
+
   if (state === 'stale') {
     if (compareDates(date, inputs.today) > 0) return undefined;
     return {
@@ -692,6 +736,7 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
       ...estimate,
       phase: 'predicted-menstrual',
       dayOfCycle: dayOfPredictedBleed,
+      predictedBleedBasis: 'expected-next-bleed',
       summary: predictedBleedSummary(windows.cycleEnd, dayOfPredictedBleed),
     };
   }

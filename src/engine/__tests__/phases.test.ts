@@ -364,19 +364,67 @@ describe('an end date logged for days that have not happened', () => {
 
   it('says she is bleeding on no day that has not arrived', () => {
     // Walked rather than sampled, and named as the phase each day does get, so
-    // the loop cannot pass by those days coming back with no phase at all.
+    // the loop cannot pass by those days coming back with no phase at all. The
+    // days of her entry that have not arrived are bleed days the engine expects
+    // rather than ones it has been told about: not `menstrual`, which would be a
+    // fact about a day that has not happened, and not the follicular or luteal
+    // half either, which would contradict an entry she typed in herself. The
+    // days past her entry take their ordinary phase.
     const today = '2024-03-10';
     const inputs = on(today);
-    let future = 0;
+    let insideTheEntry = 0;
+    let pastIt = 0;
     for (const date of walkDates('2024-02-26', '2024-03-24')) {
       const estimate = phaseForDate(inputs, date);
       if (diffDays(today, date) <= 0) continue;
-      future += 1;
-      expect(['follicular', 'fertile', 'luteal', 'premenstrual'], date).toContain(estimate?.phase);
       expect(estimate?.summary, date).not.toMatch(/Period\./);
+      if (diffDays(date, '2024-03-20') >= 0) {
+        insideTheEntry += 1;
+        expect(estimate?.phase, date).toBe('predicted-menstrual');
+        expect(estimate?.predictedBleedBasis, date).toBe('continues-logged-bleed');
+      } else {
+        pastIt += 1;
+        expect(['follicular', 'fertile', 'luteal', 'premenstrual'], date).toContain(
+          estimate?.phase
+        );
+      }
     }
-    // Not vacuous: ten of the days she typed an end for are in the future here.
-    expect(future).toBeGreaterThan(0);
+    // Not vacuous in either direction: ten days of her entry are in the future
+    // here, and four days past it are walked as well.
+    expect(insideTheEntry).toBe(10);
+    expect(pastIt).toBe(4);
+  });
+
+  it('words those days as her own entry running on rather than as a guess', () => {
+    // The provenance a consumer can read off the sentence, and the field that
+    // means it does not have to. This day belongs to a period whose start she
+    // typed in, so the sentence names that start, and it still says the day has
+    // not arrived, because an entry about a day that has not happened is not a
+    // record of it.
+    const estimate = phaseForDate(on('2024-03-10'), '2024-03-15');
+    expect(estimate?.phase).toBe('predicted-menstrual');
+    expect(estimate?.predictedBleedBasis).toBe('continues-logged-bleed');
+    expect(estimate?.dayOfCycle).toBe(diffDays('2024-02-26', '2024-03-15') + 1);
+    expect(estimate?.summary).toBe(
+      `Day ${diffDays('2024-02-26', '2024-03-15') + 1} of the period you logged starting on 2024-02-26. This day has not arrived yet, so it is still expected rather than a day you have recorded bleeding on.`
+    );
+  });
+
+  it('reads differently from the bleed the engine expects next', () => {
+    // Same phase, different provenance, and a consumer must be able to tell
+    // them apart without matching on a sentence. The predicted next bleed is
+    // counted from a start nothing has been logged for; this one is counted
+    // from a start she typed in.
+    const inputs = on('2024-03-10');
+    const continues = phaseForDate(inputs, '2024-03-15');
+    const expected = phaseForDate(inputs, '2024-03-26');
+    expect(continues?.phase).toBe('predicted-menstrual');
+    expect(continues?.predictedBleedBasis).toBe('continues-logged-bleed');
+    expect(expected?.phase).toBe('predicted-menstrual');
+    expect(expected?.predictedBleedBasis).toBe('expected-next-bleed');
+    expect(expected?.summary).toContain('expected to start on 2024-03-25');
+    expect(expected?.summary).not.toBe(continues?.summary);
+    expect(expected?.dayOfCycle).toBe(2);
   });
 
   it('publishes no fertility estimate over the days she recorded as a period', () => {
@@ -482,9 +530,24 @@ describe('a cycle she has logged no end for', () => {
     expect(phaseForDate(inputs, '2024-02-11')?.phase).toBe('menstrual');
     for (const date of walkDates('2024-02-12', ESTIMATED_BLEED_END)) {
       const estimate = phaseForDate(inputs, date);
-      expect(estimate?.phase, date).not.toBe('menstrual');
+      expect(estimate?.phase, date).toBe('predicted-menstrual');
       expect(estimate?.summary, date).not.toMatch(/Period\./);
     }
+  });
+
+  it('words the days it expects from a start she logged the same way', () => {
+    // The variant with no end date, which has the same shape: the day is part of
+    // the bleed of a cycle that began on a start she typed in, and it has not
+    // arrived. The span reaching it is the learned length rather than her entry,
+    // which is a weaker claim about the same day and not a different one, so the
+    // sentence and the basis are the ones a continuation gets.
+    const estimate = phaseForDate(on('2024-02-10'), '2024-02-12');
+    expect(estimate?.phase).toBe('predicted-menstrual');
+    expect(estimate?.predictedBleedBasis).toBe('continues-logged-bleed');
+    expect(estimate?.dayOfCycle).toBe(3);
+    expect(estimate?.summary).toBe(
+      'Day 3 of the period you logged starting on 2024-02-10. This day has not arrived yet, so it is still expected rather than a day you have recorded bleeding on.'
+    );
   });
 
   it('reports those same days as a period once they have arrived', () => {
@@ -554,14 +617,19 @@ describe('a logged bleed that runs past the predicted start', () => {
   it('claims none of it before those days have happened', () => {
     // An end logged for 2024-03-27 with today on the 24th is an entry about
     // three days that have not arrived. The bleed is drawn to today and stops,
-    // and the days past it are the period the engine expects rather than one it
-    // has been told about, worded so the two cannot be confused.
+    // and the days past it are expected rather than recorded, worded so the two
+    // cannot be confused. They are days of the bleed she is in and not of the
+    // one the engine expects next, even though the predicted start falls inside
+    // them: her entry covers those days, so the bleed it describes is the one
+    // they are counted from.
     const inputs = on('2024-03-24');
     expect(phaseForDate(inputs, '2024-03-24')?.phase).toBe('menstrual');
     expect(buildPhaseModel(inputs).menstrualWindow?.end).toBe('2024-03-24');
     for (const date of ['2024-03-25', '2024-03-27']) {
       const estimate = phaseForDate(inputs, date);
       expect(estimate?.phase, date).toBe('predicted-menstrual');
+      expect(estimate?.predictedBleedBasis, date).toBe('continues-logged-bleed');
+      expect(estimate?.dayOfCycle, date).toBe(diffDays('2024-02-26', date) + 1);
       expect(estimate?.summary, date).not.toMatch(/Period\./);
     }
   });
@@ -587,7 +655,12 @@ describe('a logged bleed that runs past the predicted start', () => {
     // been told nothing about, so it is the learned 5 days, ending 2024-03-29.
     const inputs = on('2024-03-24');
     expect(diffDays('2024-02-26', '2024-03-27') + 1).toBe(31);
-    expect(phaseForDate(inputs, '2024-03-29')?.phase).toBe('predicted-menstrual');
+    const past = phaseForDate(inputs, '2024-03-29');
+    expect(past?.phase).toBe('predicted-menstrual');
+    // Past the end she typed, so this is the bleed the engine expects next
+    // rather than hers running on, and it is counted from the predicted start.
+    expect(past?.predictedBleedBasis).toBe('expected-next-bleed');
+    expect(past?.dayOfCycle).toBe(diffDays('2024-03-25', '2024-03-29') + 1);
     expect(phaseForDate(inputs, '2024-03-30')).toBeUndefined();
   });
 

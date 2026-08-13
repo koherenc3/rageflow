@@ -249,12 +249,17 @@ export interface LearnedLength {
  * The first five are phases of a cycle the engine can place the day in. The last
  * three are not, and each is a different thing the engine says instead.
  *
- * `predicted-menstrual` is a day of the bleed expected next, which has not
- * happened. `menstrual` is a day of a bleed she logged the start of. The
- * difference is the difference between a fact and a prediction, and it is a
- * separate member rather than a flag beside `menstrual` for the same reason the
- * other two are members: a flag can be ignored, and a day the engine merely
- * expects must never render as a period she recorded.
+ * `predicted-menstrual` is a bleed day that has not happened, whether it is a
+ * day of the bleed expected next or a day of the bleed in progress that her
+ * entry or the learned length reaches past today. `menstrual` is a day of a
+ * bleed she logged the start of that has arrived. The difference is the
+ * difference between a fact and a prediction, and it is a separate member rather
+ * than a flag beside `menstrual` for the same reason the other two are members:
+ * a flag can be ignored, and a day the engine merely expects must never render
+ * as a period she recorded. Which of the two bleeds a `predicted-menstrual` day
+ * belongs to is {@link PredictedBleedBasis}, a discriminator on the estimate
+ * rather than a ninth member here, because the two mean the same thing about the
+ * day and differ only in what the claim rests on.
  *
  * `late` means the predicted start has arrived or passed and no new start has
  * been logged. That is the whole claim: the engine knows the date it predicted
@@ -277,18 +282,40 @@ export type CyclePhase =
   | 'late'
   | 'stale';
 
+/**
+ * What a `predicted-menstrual` day rests on, for a consumer that renders the two
+ * differently.
+ *
+ * `continues-logged-bleed` is a day of the bleed of the cycle she is in, which
+ * her logged end date or the learned length carries past today. The cycle it
+ * belongs to began on a start she typed in, so a calendar can style it as her
+ * own entry running on rather than as a guess about a future cycle.
+ * `expected-next-bleed` is a day of the bleed the engine expects next, which
+ * nothing has been logged for at all.
+ *
+ * Both are estimates about a day that has not happened, which is why they share
+ * a phase, and both say so in their own words. This field exists so that telling
+ * them apart does not mean matching on those words: a UI regex over a sentence
+ * breaks silently the first time the wording changes.
+ */
+export type PredictedBleedBasis = 'continues-logged-bleed' | 'expected-next-bleed';
+
 export interface PhaseEstimate {
   date: ISODate;
   phase: CyclePhase;
   /**
    * 1 on the first day of bleeding. While `predicted-menstrual` it counts from
-   * the predicted start rather than the logged one, because that day is day 1
-   * of the cycle the engine expects to begin there. Absent when there is no
-   * logged start yet, and absent while `stale`, where the only number available
-   * is days since a start that is no longer the start of anything the engine can
-   * describe.
+   * whichever start the day is indexed to: the logged one when the day continues
+   * the bleed of the cycle she is in, and the predicted one otherwise, because
+   * that day is day 1 of the cycle the engine expects to begin there.
+   * `predictedBleedBasis` says which, so the number is never ambiguous. Absent
+   * when there is no logged start yet, and absent while `stale`, where the only
+   * number available is days since a start that is no longer the start of
+   * anything the engine can describe.
    */
   dayOfCycle?: number;
+  /** Present exactly when `phase` is `predicted-menstrual`. */
+  predictedBleedBasis?: PredictedBleedBasis;
   /**
    * Days from the predicted start to today, 0 on the predicted day itself.
    * Present only when `phase` is `late`. It counts to today and not to `date`
@@ -370,7 +397,8 @@ export interface PhaseModel {
    * that have not happened, so this window stops at today until they arrive,
    * and is absent in the one case where none of the bleed has happened yet. The
    * days it stops short of are still held back from every other window, since
-   * what she recorded is what those days are. See `docs/DECISIONS.md`.
+   * what she recorded is what those days are, and `phaseForDate` reports them as
+   * `predicted-menstrual` until they arrive. See `docs/DECISIONS.md`.
    */
   menstrualWindow?: DateRange;
   /**
