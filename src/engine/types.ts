@@ -55,10 +55,15 @@ export interface DerivedCycle {
   nextStartDate?: ISODate;
   /** Days from this start to the next. Absent for the in-progress cycle. */
   lengthDays?: number;
-  /** Logged last day of bleeding, when she recorded one. */
+  /**
+   * Logged last day of bleeding, when she recorded one that the derivation
+   * placed on this cycle. Which end lands on which cycle, and when one lands on
+   * none, is stated in `deriveCycles`; this defers to it rather than restating
+   * it, because a second copy is a second thing that can go stale.
+   */
   endDate?: ISODate;
   /**
-   * Inclusive bleed length in days, when an end date was logged. Reported
+   * Inclusive bleed length in days, present exactly when `endDate` is. Reported
    * exactly as logged; an implausibly long one is kept here and left out of the
    * fit by `observedPeriodLengths`.
    */

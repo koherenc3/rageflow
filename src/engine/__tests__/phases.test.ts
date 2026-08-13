@@ -495,6 +495,28 @@ describe('an end date logged for days that have not happened', () => {
     expect(diffDays(rawEnd, '2024-03-20')).toBeGreaterThan(0);
   });
 
+  it('says nothing about her entry in the sentences those days do get', () => {
+    // The days past the projection take their ordinary phase, which says where
+    // they sit relative to the ovulation estimate and nothing more. The sentence
+    // has to stop there too: "after the period" asserts that the period is over,
+    // which is a claim about her body rather than about the layout, and her
+    // entry names every one of these days as part of the bleed. Naming the
+    // period the engine expects next is a different sentence and is left alone.
+    const inputs = on('2024-03-10');
+    let walked = 0;
+    for (const date of walkDates(addDays(PROJECTED_THROUGH, 1), '2024-03-20')) {
+      walked += 1;
+      expect(phaseForDate(inputs, date)?.summary, date).not.toMatch(
+        /(after|since|between|end of) the period/i
+      );
+    }
+    expect(walked).toBe(9);
+    expect(phaseForDate(inputs, '2024-03-12')?.phase).toBe('follicular');
+    expect(phaseForDate(inputs, '2024-03-12')?.summary).toBe(
+      'Day 16. Follicular phase, the first half of the cycle.'
+    );
+  });
+
   it('keeps the run-up, laid out after the bleed', () => {
     // The other window indexed backward from the cycle end. It is not a
     // fertility estimate, so the rule above does not reach it, and dropping it

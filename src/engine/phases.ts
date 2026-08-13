@@ -277,7 +277,11 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  * make. Withholding it is the same answer `late` and `stale` already give when
  * the engine stops trusting its own inputs, and it fails in the same direction.
  * Only the cycle carrying the entry is affected, and only until she logs the
- * next start.
+ * next start. That containment is what makes the cost of a typo bounded, so it
+ * is a property of the derivation rather than a hope about it: `deriveCycles`
+ * places an end on the cycle she wrote it under, so an entry naming a date years
+ * out cannot move onto each new last cycle in turn and withhold this estimate
+ * again on every one of them.
  *
  * So the days between today and the end of the span are laid out as bleed and
  * reported as `predicted-menstrual` until they arrive: a bleed day the engine
@@ -477,6 +481,21 @@ function enclosingCycle(cycles: readonly DerivedCycle[], date: ISODate): Derived
  */
 type CycleWindowPhase = Exclude<CyclePhase, 'menstrual' | 'late' | 'stale' | 'predicted-menstrual'>;
 
+/**
+ * The sentences. One rule governs all of them.
+ *
+ * A SUMMARY MUST NEVER ASSERT MORE THAN ITS PHASE LABEL CLAIMS. The label and
+ * the sentence describe the same day and a consumer reads both, so a sentence
+ * that reaches further is the engine claiming through the prose what it would
+ * not claim through the phase. `follicular` says where the day sits relative to
+ * the ovulation estimate and nothing else, so the sentence for it may not say
+ * the period is over: past the projection bound a day her entry names as a
+ * period takes its ordinary phase, and "after the period" contradicted the entry
+ * she typed in on exactly those days. The wording each phase is entitled to is
+ * whatever that phase already means, which for the halves either side of the
+ * estimate is which half they are.
+ */
+
 /** The bleed she logged, from the start she typed to the end she typed. */
 function menstrualSummary(dayOfCycle: number): string {
   return `Day ${dayOfCycle}. Period.`;
@@ -535,7 +554,7 @@ function describeCycleDay(
         phase: 'follicular',
         summary:
           fertility === undefined
-            ? `Day ${dayOfCycle}. Follicular phase, after the period.`
+            ? `Day ${dayOfCycle}. Follicular phase, the first half of the cycle.`
             : `Day ${dayOfCycle}. Follicular phase, between the period and the fertile window.`,
       };
 }
