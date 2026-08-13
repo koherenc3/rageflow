@@ -246,8 +246,15 @@ export interface LearnedLength {
 /**
  * Where a day sits in the cycle.
  *
- * The last two are not phases of the cycle, they are what the engine says when
- * it does not have one to report.
+ * The first five are phases of a cycle the engine can place the day in. The last
+ * three are not, and each is a different thing the engine says instead.
+ *
+ * `predicted-menstrual` is a day of the bleed expected next, which has not
+ * happened. `menstrual` is a day of a bleed she logged the start of. The
+ * difference is the difference between a fact and a prediction, and it is a
+ * separate member rather than a flag beside `menstrual` for the same reason the
+ * other two are members: a flag can be ignored, and a day the engine merely
+ * expects must never render as a period she recorded.
  *
  * `late` means the predicted start has arrived or passed and no new start has
  * been logged. That is the whole claim: the engine knows the date it predicted
@@ -256,20 +263,30 @@ export interface LearnedLength {
  * `stale` means the silence has run past everything the model can account for,
  * so there is no current cycle to place the day in at all.
  *
- * Both are in this union rather than sitting beside it as flags, so an
+ * All three are in this union rather than sitting beside it as flags, so an
  * exhaustive switch over the phases stops compiling until a consumer handles
- * them and neither can be rendered as an ordinary phase by omission.
+ * them and none can be rendered as an ordinary phase by omission.
  */
 export type CyclePhase =
-  'menstrual' | 'follicular' | 'fertile' | 'luteal' | 'premenstrual' | 'late' | 'stale';
+  | 'menstrual'
+  | 'predicted-menstrual'
+  | 'follicular'
+  | 'fertile'
+  | 'luteal'
+  | 'premenstrual'
+  | 'late'
+  | 'stale';
 
 export interface PhaseEstimate {
   date: ISODate;
   phase: CyclePhase;
   /**
-   * 1 on the first day of bleeding. Absent when there is no logged start yet,
-   * and absent while `stale`, where the only number available is days since a
-   * start that is no longer the start of anything the engine can describe.
+   * 1 on the first day of bleeding. While `predicted-menstrual` it counts from
+   * the predicted start rather than the logged one, because that day is day 1
+   * of the cycle the engine expects to begin there. Absent when there is no
+   * logged start yet, and absent while `stale`, where the only number available
+   * is days since a start that is no longer the start of anything the engine can
+   * describe.
    */
   dayOfCycle?: number;
   /**
@@ -288,12 +305,27 @@ export interface PhaseEstimate {
   summary: string;
 }
 
+/**
+ * The windows of the current cycle.
+ *
+ * They never overlap. The bleed is indexed forward from the logged start and the
+ * fertile window backward from the predicted end, so on a short cycle with a long
+ * period the raw ranges collide; `windowsFor` cuts them apart before either this
+ * model or `phaseForDate` sees them, so painting these ranges and asking day by
+ * day give the same answer for every day.
+ */
 export interface PhaseModel {
   lutealLength: LearnedLength;
   periodLength: LearnedLength;
   /** Absent until there is a logged start to anchor to, and absent while late or stale. */
   estimatedOvulationDate?: ISODate;
+  /**
+   * Absent while late or stale, and absent in the rare case where the bleed
+   * covers every day of it, which is the same days `phaseForDate` calls
+   * `menstrual`.
+   */
   fertileWindow?: DateRange;
+  /** Absent while late or stale, and absent if an earlier window covers it. */
   premenstrualWindow?: DateRange;
   /**
    * Anchored to the logged start rather than to the prediction, so it survives

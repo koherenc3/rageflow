@@ -21,7 +21,7 @@ import {
 } from '../phases';
 import { analyze, logFromStartDates } from '../index';
 import { current } from './support';
-import type { CycleLog } from '../types';
+import type { CycleLog, DayEntry } from '../types';
 
 /**
  * A staleness bound far enough out that these cases never trip it. The late and
@@ -186,6 +186,73 @@ describe('one mistyped end date does not redefine what the app calls a period', 
   it('keeps the follicular gap between the period and the fertile window', () => {
     expect(phaseForDate(inputs, '2024-03-04')?.phase).toBe('follicular');
     expect(phaseForDate(inputs, '2024-03-06')?.phase).toBe('follicular');
+  });
+});
+
+describe('a short cycle with a long period, where the windows collide', () => {
+  /**
+   * The bleed is indexed forward from the start and the fertile window backward
+   * from the end, so a short enough cycle with a long enough period puts the
+   * same days in both. 22 day cycles with a logged 7 day bleed do it: the cycle
+   * end rounds to day 23, ovulation lands on day 11, so the raw fertile window
+   * is days 6 to 12 and the bleed is days 1 to 7.
+   *
+   * Short cycles with long bleeds are a real pattern rather than a case invented
+   * to break the model, and the two outputs have to agree about it.
+   */
+  const CYCLE_DAYS = 22;
+  const BLEED_DAYS = 7;
+  const entries: DayEntry[] = [];
+  for (let i = 0, date = '2024-01-01'; i < 13; i += 1, date = addDays(date, CYCLE_DAYS)) {
+    entries.push({ date, kind: 'period-start' });
+    entries.push({ date: addDays(date, BLEED_DAYS - 1), kind: 'period-end' });
+  }
+  const { cycles } = deriveCycles({ version: 1, entries });
+  const lastStart = cycles[cycles.length - 1]?.startDate as string;
+  const inputs: PhaseInputs = {
+    cycles,
+    // 22 day cycles fit a mean of 22.69, which rounds to a 23 day cycle.
+    predictedNextStart: addDays(lastStart, 23),
+    predictionValidThrough: NEVER_STALE,
+    today: addDays(lastStart, 3),
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+  const model = buildPhaseModel(inputs);
+
+  it('is a history where the raw windows really do collide', () => {
+    // Without this the test could pass by describing a cycle with no overlap.
+    const ovulation = model.estimatedOvulationDate as string;
+    const rawFertileStart = addDays(ovulation, -FERTILE_DAYS_BEFORE_OVULATION);
+    expect(diffDays(rawFertileStart, model.menstrualWindow?.end as string)).toBeGreaterThanOrEqual(
+      0
+    );
+  });
+
+  it('hands back windows that do not overlap', () => {
+    expect(
+      diffDays(model.menstrualWindow?.end as string, model.fertileWindow?.start as string)
+    ).toBe(1);
+    expect(
+      diffDays(model.fertileWindow?.end as string, model.premenstrualWindow?.start as string)
+    ).toBeGreaterThan(0);
+  });
+
+  it('gives every day the phase its own model says that day is in', () => {
+    // The point of cutting the windows apart in one place. A UI painting the
+    // ranges and a UI asking day by day have to agree, and the disagreement this
+    // fixes was two days the model called fertile and phaseForDate called period.
+    const inWindow = (date: string, range?: { start: string; end: string }) =>
+      range !== undefined && diffDays(range.start, date) >= 0 && diffDays(date, range.end) >= 0;
+    for (let i = 0; i < 23; i += 1) {
+      const date = addDays(lastStart, i);
+      const phase = phaseForDate(inputs, date)?.phase;
+      expect(phase === 'menstrual', date).toBe(inWindow(date, model.menstrualWindow));
+      expect(phase === 'fertile', date).toBe(inWindow(date, model.fertileWindow));
+      expect(phase === 'premenstrual', date).toBe(inWindow(date, model.premenstrualWindow));
+    }
   });
 });
 
@@ -356,9 +423,11 @@ describe('a period that is late', () => {
   it('claims it again the moment the period is only due rather than overdue', () => {
     // The day before the estimate nothing has been contradicted yet, so a
     // forward-looking question about the predicted bleed still gets an answer.
+    // It is the predicted bleed rather than a logged one, which is a different
+    // claim and says so.
     const inputs = on('2024-03-24');
-    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('menstrual');
-    expect(phaseForDate(inputs, '2024-03-29')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('predicted-menstrual');
+    expect(phaseForDate(inputs, '2024-03-29')?.phase).toBe('predicted-menstrual');
   });
 
   it('never calls a completed cycle late', () => {
@@ -503,6 +572,24 @@ describe('the shape a month calendar gets', () => {
     });
   }
 
+  it('runs ordinary phases through the predicted bleed while the log is current', () => {
+    // The third reach, pinned the same way as the other two. A current log is
+    // the only state that answers for a day that has not happened, and the days
+    // it answers for are named as predicted rather than as a logged bleed.
+    const inputs = on('2024-06-10');
+    const predictedBleedEnd = addDays(predictedNextStart, PERIOD_PRIOR_MEAN_DAYS - 1);
+    for (const date of walk(lastStart, '2024-08-15')) {
+      const estimate = phaseForDate(inputs, date);
+      if (diffDays(date, predictedBleedEnd) < 0) {
+        expect(estimate, date).toBeUndefined();
+      } else if (diffDays(predictedNextStart, date) >= 0) {
+        expect(estimate?.phase, date).toBe('predicted-menstrual');
+      } else {
+        expect(ORDINARY, date).toContain(estimate?.phase);
+      }
+    }
+  });
+
   it('is contiguous late from the predicted start to today, and blank after it', () => {
     const today = validThrough;
     const inputs = on(today);
@@ -574,13 +661,34 @@ describe('phaseForDate', () => {
     // Today is 2024-03-24 here, so these are forward-looking questions rather
     // than statements about the state of the log. The predicted period runs
     // 2024-03-25 to 2024-03-29 on a 5 day prior.
-    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('predicted-menstrual');
     expect(phaseForDate(inputs, '2024-03-25')?.dayOfCycle).toBe(1);
-    expect(phaseForDate(inputs, '2024-03-29')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-29')?.phase).toBe('predicted-menstrual');
     // Past the predicted bleed the engine cannot place a day at all, because
     // the cycle it would be placed in has not started.
     expect(phaseForDate(inputs, '2024-03-30')).toBeUndefined();
     expect(phaseForDate(inputs, '2024-06-01')).toBeUndefined();
+  });
+
+  it('never reports a day it only predicts the way it reports one she logged', () => {
+    // Same day of the same bleed, once as an estimate and once as a fact. The
+    // phase and the sentence both have to tell them apart on their own, because
+    // a consumer reading either one alone must not paint a period on a day that
+    // has not happened.
+    const predicted = phaseForDate(inputs, '2024-03-26');
+    expect(predicted?.phase).toBe('predicted-menstrual');
+    expect(predicted?.dayOfCycle).toBe(2);
+    expect(predicted?.summary).not.toMatch(/Period\./);
+    expect(predicted?.summary).toContain('expected to start on 2024-03-25');
+    expect(predicted?.summary).toMatch(/estimate/i);
+
+    const logged = phaseForDate(
+      inputsFor(['2024-01-01', '2024-01-29', '2024-02-26', '2024-03-25'], '2024-04-22'),
+      '2024-03-26'
+    );
+    expect(logged?.phase).toBe('menstrual');
+    expect(logged?.dayOfCycle).toBe(2);
+    expect(logged?.summary).toBe('Day 2. Period.');
   });
 
   it('anchors a historical cycle to what actually happened, not to a prediction', () => {

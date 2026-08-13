@@ -14,11 +14,11 @@ Done.
 
 What the engine does, in three layers:
 
-| Layer           | File             | What it produces                                                                                                                                                                        |
-| --------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Cycle length | `cycleLength.ts` | Normal-Inverse-Gamma posterior over cycle length, recency weighted, giving a Student-t posterior predictive and 50%/80% credible intervals as date ranges                               |
-| 2. Phases       | `phases.ts`      | Menstrual, follicular, fertile, luteal, premenstrual for any date, plus the `late` and `stale` states, estimated ovulation, and a fertile window from learned luteal and period lengths |
-| 3. Calibration  | `calibration.ts` | Measured error and coverage from replaying the log, feeding back as an interval widening factor                                                                                         |
+| Layer           | File             | What it produces                                                                                                                                                                                               |
+| --------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Cycle length | `cycleLength.ts` | Normal-Inverse-Gamma posterior over cycle length, recency weighted, giving a Student-t posterior predictive and 50%/80% credible intervals as date ranges                                                      |
+| 2. Phases       | `phases.ts`      | Menstrual, follicular, fertile, luteal, premenstrual for any date, plus the `predicted-menstrual`, `late` and `stale` states, estimated ovulation, and a fertile window from learned luteal and period lengths |
+| 3. Calibration  | `calibration.ts` | Measured error and coverage from replaying the log, feeding back as an interval widening factor                                                                                                                |
 
 Cold start behaviour is enforced in the engine, not in the UI, so a population baseline can never be presented as a personal prediction:
 
@@ -29,14 +29,15 @@ Cold start behaviour is enforced in the engine, not in the UI, so a population b
 | 3 to 5            | `moderate` | Real predictions, intervals tightening                            |
 | 6+                | `high`     | Full confidence reporting                                         |
 
-The original spec had five phases and that was wrong twice over, so there are seven. A period that has not arrived and a log that has stopped are both states the app has to be able to report, and neither is a phase of a cycle:
+The original spec had five phases and that was wrong three times over, so there are eight. A period that has not arrived and a log that has stopped are both states the app has to be able to report, neither is a phase of a cycle, and a day of the bleed the engine merely expects is not the same claim as a day of one she logged:
 
-| State   | When                                                                                    | What the engine does                                                                                                 |
-| ------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `late`  | Today is on or past the predicted start, nothing logged                                 | Reports the days late, keeps the day of cycle, drops the ovulation estimate and the fertile and premenstrual windows |
-| `stale` | Today is past both the 99% predictive quantile and two elapsed cycle lengths of silence | Reports no cycle at all, drops every predicted window, and `prediction` hands back no dates                          |
+| State                 | When                                                                                    | What the engine does                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `predicted-menstrual` | A day of the bleed expected next, on a log that is still current                        | Reports the day of the expected bleed and names the date it is indexed to, worded so it cannot read as a logged one  |
+| `late`                | Today is on or past the predicted start, nothing logged                                 | Reports the days late, keeps the day of cycle, drops the ovulation estimate and the fertile and premenstrual windows |
+| `stale`               | Today is past both the 99% predictive quantile and two elapsed cycle lengths of silence | Reports no cycle at all, drops every predicted window, and `prediction` hands back no dates                          |
 
-Both are read off today, never off a date being asked about, so a month calendar querying next Tuesday is not evidence that anything has stopped. Neither reaches past today, and both stay contiguous up to it, so a month renders as a run of cells and then blanks rather than a scatter. Neither will claim the bleed the engine predicted and then watched not arrive. The bleed she logged the start of survives both, since it is a fact rather than a prediction, and that one rule is what the whole staleness design is stated in. Stopping is also a different state from never having started, and the two read differently. What each state reaches per date is spelled out once, in the doc comment on `phaseForDate`, which is the contract; see [[DECISIONS]] for why it is drawn that way.
+`late` and `stale` are read off today, never off a date being asked about, so a month calendar querying next Tuesday is not evidence that anything has stopped. Neither reaches past today, and both stay contiguous up to it, so a month renders as a run of cells and then blanks rather than a scatter. Neither will claim the bleed the engine predicted and then watched not arrive. The bleed she logged the start of survives both, since it is a fact rather than a prediction, and that one rule is what the whole staleness design is stated in: it is also why the bleed still ahead of her is its own state rather than `menstrual`. Stopping is also a different state from never having started, and the two read differently. What each state reaches per date is spelled out once, in the doc comment on `phaseForDate`, which is the contract; see [[DECISIONS]] for why it is drawn that way.
 
 ## Task 2: local storage, logging, and the prediction UI
 
@@ -45,7 +46,7 @@ The first version she can actually use.
 - Local-first persistence. IndexedDB or localStorage behind a small repository interface, so storage can be swapped without touching the engine.
 - Logging: one button for "my period started today", a date picker for backfilling, and an optional "it ended" entry. Nothing else.
 - Editing and deleting entries, because she will typo a date.
-- The prediction view: current phase, next period as a range not a date, days until, confidence. Including the `late` and `stale` states, which the engine already emits and which the UI must render as their own thing rather than as phases. A late prediction has no intervals to render and a stale one has no dates at all, by construction.
+- The prediction view: current phase, next period as a range not a date, days until, confidence. Including the `late` and `stale` states, which the engine already emits and which the UI must render as their own thing rather than as phases. A late prediction has no intervals to render and a stale one has no dates at all, by construction. A `predicted-menstrual` day has to look different from a logged period day too, since one is a fact and the other is an estimate.
 - The confirmation flow for suspected missed logs. The engine already emits the question; the UI has to ask it and act on the answer.
 - Clinical notes surfaced somewhere calm, not as an alarm.
 - The accuracy view: measured mean absolute error and observed coverage, shown honestly.
