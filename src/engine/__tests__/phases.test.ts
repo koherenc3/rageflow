@@ -138,8 +138,11 @@ describe('period length', () => {
 describe('one mistyped end date does not redefine what the app calls a period', () => {
   // She starts on 2024-02-26, means to log the end as 2024-03-01 and types
   // 2024-03-11 instead. Fifteen days is inside the fittable range, so nothing
-  // upstream catches it: the only thing standing between that typo and a
-  // rewritten phase model is how much weight one observation carries.
+  // upstream catches it: the only thing standing between that typo and every
+  // other cycle in the log is how much weight one observation carries.
+  //
+  // The cycle she typed it on is a different question. That one is hers, and it
+  // is shown as she recorded it.
   const log: CycleLog = {
     version: 1,
     entries: [
@@ -175,19 +178,192 @@ describe('one mistyped end date does not redefine what the app calls a period', 
     expect(inputs.periodLength.meanDays).toBeLessThan(8);
   });
 
-  it('still calls the estimated fertile window fertile, not Period.', () => {
-    // Without the damping the menstrual window ran to day 12 and swallowed the
-    // front of the fertile window, which starts on 2024-03-07.
-    for (const date of ['2024-03-07', '2024-03-08', '2024-03-12', '2024-03-13']) {
+  it('leaves the cycles she logged no end for to the learned length', () => {
+    // The cycle starting 2024-01-01 has no end date of its own, so the damped
+    // 7 day estimate is what describes it. Undamped, one 15 day entry pulled
+    // that estimate to 11.9, which rounded to a 12 day window and reported
+    // "Period." across the front of this cycle's own fertile window.
+    expect(phaseForDate(inputs, '2024-01-07')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-01-08')?.phase).toBe('follicular');
+    for (const date of ['2024-01-11', '2024-01-16', '2024-01-17']) {
       const estimate = phaseForDate(inputs, date);
-      expect(estimate?.phase).toBe('fertile');
-      expect(estimate?.summary).not.toMatch(/Period\./);
+      expect(estimate?.phase, date).toBe('fertile');
+      expect(estimate?.summary, date).not.toMatch(/Period\./);
     }
   });
 
-  it('keeps the follicular gap between the period and the fertile window', () => {
-    expect(phaseForDate(inputs, '2024-03-04')?.phase).toBe('follicular');
-    expect(phaseForDate(inputs, '2024-03-06')?.phase).toBe('follicular');
+  it('shows the cycle she typed it on exactly as she typed it', () => {
+    // Her own entry governs her own cycle. The engine holds a recorded end date
+    // for this bleed, so reporting the learned estimate over the top of it would
+    // be an estimate contradicting a fact.
+    for (const date of ['2024-03-01', '2024-03-07', '2024-03-11']) {
+      expect(phaseForDate(inputs, date)?.phase, date).toBe('menstrual');
+    }
+    // Only the days past the end she logged are anything else, and what is left
+    // of the fertile window after the cut is still fertile.
+    expect(phaseForDate(inputs, '2024-03-12')?.phase).toBe('fertile');
+    expect(buildPhaseModel(inputs).menstrualWindow?.end).toBe('2024-03-11');
+  });
+});
+
+describe('the end date she logged governs the bleed of the cycle she logged it on', () => {
+  // The learned length predicts the cycles she has not described. On one she
+  // has, it is not consulted at all: the engine holds the fact and must not
+  // report an estimate on top of it.
+  const log: CycleLog = {
+    version: 1,
+    entries: [
+      { date: '2024-01-01', kind: 'period-start' },
+      { date: '2024-01-02', kind: 'period-end' },
+      { date: '2024-01-29', kind: 'period-start' },
+      { date: '2024-02-26', kind: 'period-start' },
+    ],
+  };
+  const { cycles } = deriveCycles(log);
+  const inputs: PhaseInputs = {
+    cycles,
+    predictedNextStart: '2024-03-25',
+    predictionValidThrough: '2024-04-23',
+    today: '2024-03-13',
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+
+  it('is a case where the estimate and the logged end really do differ', () => {
+    // Without this the test could pass by describing a cycle whose logged end
+    // happens to land exactly where the learned length already put it.
+    expect(cycles[0]?.endDate).toBe('2024-01-02');
+    expect(Math.round(inputs.periodLength.meanDays)).toBe(4);
+  });
+
+  it('ends the bleed where she said it ended, not where the estimate did', () => {
+    expect(phaseForDate(inputs, '2024-01-02')?.phase).toBe('menstrual');
+    // 2024-01-03 and 2024-01-04 are inside the 4 day estimate and outside what
+    // she recorded. She wrote down that she had stopped bleeding.
+    expect(phaseForDate(inputs, '2024-01-03')?.phase).toBe('follicular');
+    expect(phaseForDate(inputs, '2024-01-04')?.phase).toBe('follicular');
+    expect(phaseForDate(inputs, '2024-01-03')?.summary).not.toMatch(/Period\./);
+  });
+
+  it('still uses the learned length for the cycles she logged no end for', () => {
+    // The estimate is not being taken away, it is being kept to the job it is
+    // for. The cycle starting 2024-01-29 has no end date, so its bleed is the
+    // learned 4 days.
+    expect(phaseForDate(inputs, '2024-02-01')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-02-02')?.phase).toBe('follicular');
+    expect(buildPhaseModel(inputs).menstrualWindow).toEqual({
+      start: '2024-02-26',
+      end: addDays('2024-02-26', 3),
+    });
+  });
+});
+
+describe('an implausibly long logged end is shown rather than clamped', () => {
+  // She means 2024-02-28 and types 2024-03-18, which is 22 days.
+  // `MAX_FITTABLE_PERIOD_LENGTH_DAYS` keeps that out of the fit and deliberately
+  // does not clamp what is shown: the entry is health data she typed in, the app
+  // does not get to overwrite it, and clamping the drawn window is that same
+  // overwriting moved to the display layer. A 22 day band on screen is itself
+  // the signal that the entry is wrong.
+  const log: CycleLog = {
+    version: 1,
+    entries: [
+      { date: '2024-01-01', kind: 'period-start' },
+      { date: '2024-01-29', kind: 'period-start' },
+      { date: '2024-02-26', kind: 'period-start' },
+      { date: '2024-03-18', kind: 'period-end' },
+    ],
+  };
+  const { cycles } = deriveCycles(log);
+  const inputs: PhaseInputs = {
+    cycles,
+    predictedNextStart: '2024-03-25',
+    predictionValidThrough: '2024-04-23',
+    today: '2024-03-20',
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+  const model = buildPhaseModel(inputs);
+
+  it('keeps it out of the fit, so no other cycle is touched by it', () => {
+    expect(observedPeriodLengths(cycles)).toEqual([]);
+    expect(model.periodLength.meanDays).toBe(PERIOD_PRIOR_MEAN_DAYS);
+    expect(cycles[2]?.periodLengthDays).toBe(22);
+  });
+
+  it('draws the window at the full logged length, past the fittable bound', () => {
+    const window = model.menstrualWindow;
+    expect(window?.end).toBe('2024-03-18');
+    expect(diffDays(window?.start as string, window?.end as string) + 1).toBe(22);
+    expect(diffDays(window?.start as string, window?.end as string) + 1).toBeGreaterThan(
+      MAX_FITTABLE_PERIOD_LENGTH_DAYS
+    );
+  });
+
+  it('lets it swallow the fertile window rather than trimming the entry', () => {
+    // The failure direction is safe: a mistyped end suppresses fertility output
+    // rather than over-claiming it.
+    expect(model.fertileWindow).toBeUndefined();
+    expect(model.estimatedOvulationDate).toBeUndefined();
+    expect(phaseForDate(inputs, '2024-03-12')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-19')?.phase).toBe('luteal');
+  });
+});
+
+describe('a logged bleed that runs past the predicted start', () => {
+  // The ordering the whole design rests on, at the one point it can be tested:
+  // a day that is both inside a bleed she logged and at or past a date the
+  // engine predicted. The fact wins in every state of the log.
+  const starts = ['2024-01-01', '2024-01-29', '2024-02-26'];
+  const entries: DayEntry[] = [
+    ...starts.map((date): DayEntry => ({ date, kind: 'period-start' })),
+    { date: '2024-03-27', kind: 'period-end' },
+  ];
+  const { cycles } = deriveCycles({ version: 1, entries });
+
+  function on(today: string): PhaseInputs {
+    return {
+      cycles,
+      predictedNextStart: '2024-03-25',
+      predictionValidThrough: '2024-04-23',
+      today,
+      lutealLength: learnLutealLength(),
+      periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
+      confidence: 0.5,
+      confidenceTier: 'moderate',
+    };
+  }
+
+  it('reads as the bleed she logged rather than the one the engine predicted', () => {
+    // Today is before the predicted start, so 2024-03-25 would otherwise be
+    // `predicted-menstrual`. She has already recorded bleeding on it.
+    const inputs = on('2024-03-24');
+    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-27')?.phase).toBe('menstrual');
+    // Past what she logged, the predicted bleed is claimed as normal.
+    expect(phaseForDate(inputs, '2024-03-28')?.phase).toBe('predicted-menstrual');
+  });
+
+  it('leaves the length of the bleed it predicts to the learned estimate', () => {
+    // The two are different questions and the logged end answers only the first.
+    // This entry runs 31 days; the bleed the engine expects next is one it has
+    // been told nothing about, so it is the learned 5 days, ending 2024-03-29.
+    const inputs = on('2024-03-24');
+    expect(diffDays('2024-02-26', '2024-03-27') + 1).toBe(31);
+    expect(phaseForDate(inputs, '2024-03-29')?.phase).toBe('predicted-menstrual');
+    expect(phaseForDate(inputs, '2024-03-30')).toBeUndefined();
+  });
+
+  it('reads as the bleed she logged rather than as being late', () => {
+    const inputs = on('2024-03-29');
+    expect(buildPhaseModel(inputs).isLate).toBe(true);
+    expect(phaseForDate(inputs, '2024-03-25')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-27')?.phase).toBe('menstrual');
+    expect(phaseForDate(inputs, '2024-03-28')?.phase).toBe('late');
   });
 });
 

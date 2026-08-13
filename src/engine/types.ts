@@ -329,6 +329,14 @@ export interface PhaseEstimate {
  * published here: a day of a completed cycle can come back `fertile` while this
  * model, late today, holds no fertile window at all. Naming that domain is what
  * makes the guarantee exact, not what softens it.
+ *
+ * `isLate` and `isStale` are two tiers of one state and never both true. Late
+ * runs from the predicted start to the staleness bound, stale takes over past
+ * it, and the predicted start has passed with nothing logged in either. They are
+ * spelled out here rather than left to be inferred field by field, exactly as
+ * {@link NextStartPrediction} spells out its own three tiers, because "still
+ * late" and "so late the model has given up" read as one thing to a consumer
+ * asking whether to show anything overdue.
  */
 export interface PhaseModel {
   lutealLength: LearnedLength;
@@ -349,25 +357,36 @@ export interface PhaseModel {
   /** Absent while late or stale, and absent if an earlier window covers it. */
   premenstrualWindow?: DateRange;
   /**
-   * Anchored to the logged start rather than to the prediction, so it survives
-   * both `late` and `stale`. It describes a bleed she logged the start of, which
-   * stays true however long the silence after it runs.
+   * Anchored to what she logged rather than to the prediction, so it survives
+   * both `late` and `stale`. It runs from the start she logged to the end she
+   * logged, and only to the learned period length when she recorded no end, so
+   * it describes a bleed she typed in rather than one estimated over the top of
+   * her entry. That stays true however long the silence after it runs.
+   *
+   * A logged end is taken at face value however implausible it is, so this can
+   * be far longer than any real period and can leave no room for the other
+   * windows. See `docs/DECISIONS.md`.
    */
   menstrualWindow?: DateRange;
   /**
-   * True when the predicted start has passed with nothing logged since. The
-   * ovulation estimate and the fertile and premenstrual windows are absent:
-   * all three are indexed backward from the end of a cycle whose end is now
-   * unknown, so they describe a cycle that is not happening as predicted.
+   * True from the predicted start until the staleness bound, with nothing logged
+   * since. False once `isStale` takes over, which is the tier above rather than
+   * a return to normal: a consumer showing something overdue has to read both.
+   *
+   * The ovulation estimate and the fertile and premenstrual windows are absent
+   * in both tiers: all three are indexed backward from the end of a cycle whose
+   * end is now unknown, so they describe a cycle that is not happening as
+   * predicted.
    */
   isLate: boolean;
   /** Days past the predicted start. Present only while `isLate`. */
   daysLate?: number;
   /**
    * True when the log stopped too long ago for these windows to describe a
-   * current cycle. Every predicted window is absent in that case, deliberately:
-   * a months old fertile window presented as the current one is wrong if she has
-   * stopped logging and harmful if the reason is a pregnancy. What is left is
+   * current cycle, which is the tier past `isLate` and never true alongside it.
+   * Every predicted window is absent in that case, deliberately: a months old
+   * fertile window presented as the current one is wrong if she has stopped
+   * logging and harmful if the reason is a pregnancy. What is left is
    * `menstrualWindow`, which is a logged fact rather than a prediction.
    */
   isStale: boolean;
