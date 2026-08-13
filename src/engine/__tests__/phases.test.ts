@@ -155,7 +155,9 @@ describe('one mistyped end date does not redefine what the app calls a period', 
     cycles,
     predictedNextStart: '2024-03-25',
     predictionValidThrough: '2024-04-05',
-    today: '2024-03-25',
+    // Mid-cycle, so the log is current and the fertile window is on the model.
+    // What is under test is the learned period length, not the state of the log.
+    today: '2024-03-13',
     lutealLength: learnLutealLength(),
     periodLength: learnPeriodLength(observed),
     confidence: 0.5,
@@ -252,6 +254,78 @@ describe('a short cycle with a long period, where the windows collide', () => {
       expect(phase === 'menstrual', date).toBe(inWindow(date, model.menstrualWindow));
       expect(phase === 'fertile', date).toBe(inWindow(date, model.fertileWindow));
       expect(phase === 'premenstrual', date).toBe(inWindow(date, model.premenstrualWindow));
+    }
+  });
+
+  it('keeps the ovulation estimate inside the window it is the middle of', () => {
+    const ovulation = model.estimatedOvulationDate as string;
+    expect(diffDays(model.fertileWindow?.start as string, ovulation)).toBeGreaterThanOrEqual(0);
+    expect(diffDays(ovulation, model.fertileWindow?.end as string)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('a cycle short enough that the bleed covers the ovulation estimate', () => {
+  /**
+   * The far end of the same family. 18 day cycles with a logged 7 day bleed put
+   * the estimated ovulation on day 6, inside the bleed rather than just before
+   * it, so cutting the fertile window against the bleed takes its middle and not
+   * only its front. What is left is a stray day and an ovulation date the same
+   * engine calls a period day, which is a model disagreeing with itself, so
+   * neither is published.
+   */
+  const CYCLE_DAYS = 18;
+  const BLEED_DAYS = 7;
+  const entries: DayEntry[] = [];
+  for (let i = 0, date = '2024-01-01'; i < 13; i += 1, date = addDays(date, CYCLE_DAYS)) {
+    entries.push({ date, kind: 'period-start' });
+    entries.push({ date: addDays(date, BLEED_DAYS - 1), kind: 'period-end' });
+  }
+  const { cycles } = deriveCycles({ version: 1, entries });
+  const lastStart = cycles[cycles.length - 1]?.startDate as string;
+  const predicted = addDays(lastStart, CYCLE_DAYS);
+  const inputs: PhaseInputs = {
+    cycles,
+    predictedNextStart: predicted,
+    predictionValidThrough: NEVER_STALE,
+    today: addDays(lastStart, 3),
+    lutealLength: learnLutealLength(),
+    periodLength: learnPeriodLength(observedPeriodLengths(cycles)),
+    confidence: 0.5,
+    confidenceTier: 'moderate',
+  };
+  const model = buildPhaseModel(inputs);
+
+  it('is a history where the bleed really does cover the ovulation estimate', () => {
+    // Without this the test could pass by describing a cycle with room for both.
+    const ovulation = addDays(predicted, -LUTEAL_PRIOR_MEAN_DAYS);
+    expect(diffDays(ovulation, model.menstrualWindow?.end as string)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('publishes neither the ovulation estimate nor a window with no middle', () => {
+    expect(model.fertileWindow).toBeUndefined();
+    expect(model.estimatedOvulationDate).toBeUndefined();
+  });
+
+  it('keeps the windows it can still stand behind', () => {
+    // Dropping the fertility estimate is not a reason to stop describing the
+    // bleed she logged or the run-up to the next expected start.
+    expect(model.menstrualWindow?.start).toBe(lastStart);
+    expect(model.premenstrualWindow).toBeDefined();
+  });
+
+  it('calls no day of the cycle fertile either', () => {
+    for (let i = 0; i < CYCLE_DAYS; i += 1) {
+      const date = addDays(lastStart, i);
+      expect(phaseForDate(inputs, date)?.phase, date).not.toBe('fertile');
+    }
+  });
+
+  it('names no fertile window in the sentences for the days around it', () => {
+    // The summaries for follicular and luteal quote the fertile window when
+    // there is one. There is not, so they must not.
+    for (let i = 0; i < CYCLE_DAYS; i += 1) {
+      const date = addDays(lastStart, i);
+      expect(phaseForDate(inputs, date)?.summary, date).not.toMatch(/fertile|ovulation/i);
     }
   });
 });
@@ -356,12 +430,45 @@ describe('a period that is late', () => {
 
   it('is a statement about today and not about any date being asked about', () => {
     // The month-calendar case. Today is late, so every day before the predicted
-    // start still gets its ordinary phase.
+    // start still gets a phase rather than being blanked or painted late.
     const inputs = on('2024-03-31');
     expect(phaseForDate(inputs, '2024-03-31')?.phase).toBe('late');
-    expect(phaseForDate(inputs, '2024-03-12')?.phase).toBe('fertile');
+    expect(phaseForDate(inputs, '2024-03-12')?.phase).toBe('follicular');
     expect(phaseForDate(inputs, '2024-02-27')?.phase).toBe('menstrual');
     expect(phaseForDate(inputs, '2024-01-16')?.phase).toBe('fertile');
+  });
+
+  it('withholds the fertile reading per day, not just on the model', () => {
+    // The disagreement first, so the test cannot pass by describing a cycle
+    // that had no fertile days to withhold. While the log is current these
+    // exact days are fertile and the model publishes the window they sit in.
+    const whileCurrent = on('2024-03-12');
+    expect(buildPhaseModel(whileCurrent).fertileWindow).toBeDefined();
+    for (const date of ['2024-03-07', '2024-03-12', '2024-03-13']) {
+      expect(phaseForDate(whileCurrent, date)?.phase, date).toBe('fertile');
+    }
+
+    // Once today is late the model drops the window, and handing the same days
+    // back one calendar cell at a time would be that suppression undone. They
+    // keep a phase, since nothing has contradicted the days themselves, but it
+    // is the follicular or luteal half they sit in rather than fertile.
+    const late = on('2024-03-31');
+    expect(buildPhaseModel(late).fertileWindow).toBeUndefined();
+    for (const date of ['2024-03-07', '2024-03-12', '2024-03-13']) {
+      const estimate = phaseForDate(late, date);
+      expect(estimate?.phase, date).not.toBe('fertile');
+      expect(['follicular', 'luteal'], date).toContain(estimate?.phase);
+      expect(estimate?.summary, date).not.toMatch(/fertile|ovulation/i);
+    }
+  });
+
+  it('withholds the premenstrual reading the same way, for the same reason', () => {
+    // The premenstrual run-up is indexed backward from the same contradicted
+    // cycle end, and the model drops it alongside the fertile window.
+    expect(phaseForDate(on('2024-03-24'), '2024-03-24')?.phase).toBe('premenstrual');
+    const late = on('2024-03-31');
+    expect(buildPhaseModel(late).premenstrualWindow).toBeUndefined();
+    expect(phaseForDate(late, '2024-03-24')?.phase).toBe('luteal');
   });
 
   it('stops claiming the predicted bleed once it has not arrived', () => {
@@ -601,6 +708,42 @@ describe('the shape a month calendar gets', () => {
         expect(estimate?.phase, date).toBe('late');
       } else {
         expect(ORDINARY, date).toContain(estimate?.phase);
+      }
+    }
+  });
+
+  it('publishes no window the day-by-day answer disagrees with, in any state', () => {
+    // The model and phaseForDate read the same windows, so painting the ranges
+    // and asking day by day cannot differ. Walked in all three states rather
+    // than in the one that changed: while late the model dropped the fertile
+    // window and phaseForDate went on handing the same days back one cell at a
+    // time, and what let that through was checking the state being edited and
+    // not its siblings.
+    const inWindow = (date: string, range?: { start: string; end: string }) =>
+      range !== undefined && diffDays(range.start, date) >= 0 && diffDays(date, range.end) >= 0;
+    for (const today of ['2024-06-10', validThrough, '2024-10-01']) {
+      const inputs = on(today);
+      const model = buildPhaseModel(inputs);
+      for (const date of walk(lastStart, '2024-07-20')) {
+        const phase = phaseForDate(inputs, date)?.phase;
+        const where = `${today} ${date}`;
+        expect(phase === 'menstrual', where).toBe(inWindow(date, model.menstrualWindow));
+        expect(phase === 'fertile', where).toBe(inWindow(date, model.fertileWindow));
+        expect(phase === 'premenstrual', where).toBe(inWindow(date, model.premenstrualWindow));
+      }
+    }
+  });
+
+  it('never claims a predicted bleed is a logged one, in any state', () => {
+    // The eighth state walked against the same rule. `predicted-menstrual` days
+    // are days the model holds no window for, and the model's menstrual window
+    // is the bleed she logged, so the two never cover the same day.
+    for (const today of ['2024-06-10', validThrough, '2024-10-01']) {
+      const inputs = on(today);
+      const menstrualWindow = buildPhaseModel(inputs).menstrualWindow;
+      for (const date of walk(lastStart, '2024-07-20')) {
+        if (phaseForDate(inputs, date)?.phase !== 'predicted-menstrual') continue;
+        expect(diffDays(date, menstrualWindow?.end as string), `${today} ${date}`).toBeLessThan(0);
       }
     }
   });

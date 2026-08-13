@@ -310,19 +310,26 @@ export interface PhaseEstimate {
  *
  * They never overlap. The bleed is indexed forward from the logged start and the
  * fertile window backward from the predicted end, so on a short cycle with a long
- * period the raw ranges collide; `windowsFor` cuts them apart before either this
- * model or `phaseForDate` sees them, so painting these ranges and asking day by
- * day give the same answer for every day.
+ * period the raw ranges collide; `windowsFor` cuts them apart, and drops whatever
+ * the state of the log has contradicted, before either this model or
+ * `phaseForDate` sees them. These are the only windows there are, so painting
+ * these ranges and asking `phaseForDate` day by day give the same answer for
+ * every day, in every state of the log.
  */
 export interface PhaseModel {
   lutealLength: LearnedLength;
   periodLength: LearnedLength;
-  /** Absent until there is a logged start to anchor to, and absent while late or stale. */
+  /**
+   * Absent until there is a logged start to anchor to, absent while late or
+   * stale, and absent whenever `fertileWindow` is, since an ovulation estimate
+   * with no window around it is a marker with nowhere to sit.
+   */
   estimatedOvulationDate?: ISODate;
   /**
    * Absent while late or stale, and absent in the rare case where the bleed
    * covers every day of it, which is the same days `phaseForDate` calls
-   * `menstrual`.
+   * `menstrual`. Whenever it is absent `phaseForDate` reports no day of this
+   * cycle as `fertile`.
    */
   fertileWindow?: DateRange;
   /** Absent while late or stale, and absent if an earlier window covers it. */
