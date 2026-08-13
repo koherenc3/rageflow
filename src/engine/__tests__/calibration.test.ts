@@ -14,6 +14,9 @@ import { analyze, logFromStartDates } from '../index';
 import { current } from './support';
 import type { CalibrationRecord } from '../types';
 
+/** Late enough that derivation takes every start in this file. */
+const AFTER_EVERY_START = '2024-12-31';
+
 function record(partial: Partial<CalibrationRecord> & { within80: boolean }): CalibrationRecord {
   return {
     cycleIndex: 0,
@@ -157,13 +160,13 @@ describe('buildCalibration', () => {
   ];
 
   it('grades one prediction per completed cycle', () => {
-    const { cycles } = deriveCycles(logFromStartDates(starts));
+    const { cycles } = deriveCycles(logFromStartDates(starts), AFTER_EVERY_START);
     const summary = buildCalibration(cycles);
     expect(summary.sampleCount).toBe(starts.length - 1);
   });
 
   it('uses only the cycles before each outcome, so the numbers are out of sample', () => {
-    const { cycles } = deriveCycles(logFromStartDates(starts));
+    const { cycles } = deriveCycles(logFromStartDates(starts), AFTER_EVERY_START);
     const summary = buildCalibration(cycles);
     // The first graded prediction has no history at all behind it, so it is the
     // population prior's 29 days rather than the observed 28.
@@ -184,14 +187,14 @@ describe('buildCalibration', () => {
       '2024-06-17',
       '2024-07-15',
     ];
-    const { cycles } = deriveCycles(logFromStartDates(withMissedLog));
+    const { cycles } = deriveCycles(logFromStartDates(withMissedLog), AFTER_EVERY_START);
     const summary = buildCalibration(cycles);
     expect(summary.records.some((r) => Math.abs(r.errorDays) > 20)).toBe(false);
     expect(summary.meanAbsoluteErrorDays).toBeLessThan(2);
   });
 
   it('feeds the widen factor into the next prediction, not the current one', () => {
-    const { cycles } = deriveCycles(logFromStartDates(starts));
+    const { cycles } = deriveCycles(logFromStartDates(starts), AFTER_EVERY_START);
     const summary = buildCalibration(cycles);
     // Coverage is perfect on this run, so nothing is widened.
     expect(summary.coverage80).toBe(1);

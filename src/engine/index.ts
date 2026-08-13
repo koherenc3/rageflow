@@ -42,7 +42,7 @@ export interface AnalyzeOptions {
 export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnalysis {
   const today = options.today ?? todayLocal();
 
-  const { cycles, missedLogSuspicions } = deriveCycles(log);
+  const { cycles, missedLogSuspicions, futureDatedStarts } = deriveCycles(log, today);
   const lengths = fittableLengths(cycles);
   const posterior = fitCycleLength(lengths);
   const calibration = buildCalibration(cycles);
@@ -89,6 +89,7 @@ export function analyze(log: CycleLog, options: AnalyzeOptions = {}): CycleAnaly
     calibration,
     clinicalNotes: deriveClinicalNotes(cycles),
     missedLogSuspicions,
+    futureDatedStarts,
     confidence,
     confidenceTier,
     personalized,

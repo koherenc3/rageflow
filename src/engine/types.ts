@@ -365,7 +365,9 @@ export interface PhaseModel {
    *
    * A logged end is taken at face value however implausible it is, so this can
    * be far longer than any real period and can leave no room for the other
-   * windows. See `docs/DECISIONS.md`.
+   * windows. It is not read past today, though: an end dated in the future is a
+   * claim about days that have not happened rather than a record of them, and
+   * the window stops at today until they arrive. See `docs/DECISIONS.md`.
    */
   menstrualWindow?: DateRange;
   /**
@@ -435,6 +437,20 @@ export interface ClinicalNote {
   message: string;
 }
 
+/**
+ * A logged period start dated after today, left out of the derivation.
+ *
+ * The entry stays in the log exactly as she typed it. This is the engine saying
+ * it has not counted that start yet, so a UI can show why a date she can see in
+ * her history is not the start of anything, rather than leaving her to wonder
+ * where it went.
+ */
+export interface FutureDatedStart {
+  date: ISODate;
+  /** Plain sentence the UI can show verbatim. */
+  message: string;
+}
+
 /** A gap the engine believes is two cycles with a missed start log. */
 export interface MissedLogSuspicion {
   cycleIndex: number;
@@ -459,6 +475,8 @@ export interface CycleAnalysis {
   calibration: CalibrationSummary;
   clinicalNotes: readonly ClinicalNote[];
   missedLogSuspicions: readonly MissedLogSuspicion[];
+  /** Logged starts dated after `today`, which no cycle here is derived from. */
+  futureDatedStarts: readonly FutureDatedStart[];
   confidence: number;
   confidenceTier: ConfidenceTier;
   personalized: boolean;

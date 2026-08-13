@@ -28,7 +28,16 @@ import {
   PERIOD_PRIOR_SD_DAYS,
   PREMENSTRUAL_WINDOW_DAYS,
 } from './constants';
-import { addDays, compareDates, diffDays, isWithin, roundDays, type ISODate } from './date';
+import {
+  addDays,
+  compareDates,
+  diffDays,
+  isWithin,
+  maxDate,
+  minDate,
+  roundDays,
+  type ISODate,
+} from './date';
 import type {
   ConfidenceTier,
   CyclePhase,
@@ -142,7 +151,8 @@ interface CycleWindows {
   predictedBleedDays: number;
   /**
    * The bleed of this cycle. It runs from the logged start to the logged end
-   * when she recorded one, and to the learned length when she did not.
+   * when she recorded one, and to the learned length when she did not, and it
+   * never reaches past today on the strength of an end dated in the future.
    */
   menstrual: DateRange;
   /**
@@ -209,6 +219,15 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  * of the fit and deliberately does not clamp what is shown; see
  * `docs/DECISIONS.md`.
  *
+ * It is not read past today, which is the one bound on it and is a different
+ * question from its length. Showing a 22 day bleed that has already happened is
+ * showing her data as it is; saying she is bleeding on days that have not
+ * happened is a claim about the future, and a logged fact about the future is
+ * not a fact. So the bleed is drawn to today and stops there, and the days
+ * between today and the end she typed take their ordinary phase until they
+ * arrive. Her entry is not altered by any of that, and the day it names becomes
+ * a period day the moment it comes round.
+ *
  * The bleed is indexed forward from the cycle start and the fertile window
  * backward from the cycle end, so on a short cycle with a long period the two
  * collide: a 23 day cycle with a 7 day bleed puts days 6 and 7 in both.
@@ -235,19 +254,22 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  * the log. `PhaseModel` states that agreement and its domain in full, including
  * why a completed cycle sits outside it.
  */
-function windowsFor(
-  cycle: DerivedCycle,
-  cycleEnd: ISODate,
-  inputs: PhaseInputs,
-  state: LogState
-): CycleWindows {
+function windowsFor(cycle: DerivedCycle, inputs: PhaseInputs, state: LogState): CycleWindows {
   const cycleStart = cycle.startDate;
+  // A completed cycle ends where the next one she logged began; the in-progress
+  // one ends where the prediction puts it. Derived here so the windows and every
+  // reader of them cannot disagree about where the cycle stops.
+  const cycleEnd = cycle.nextStartDate ?? inputs.predictedNextStart;
   const predictedBleedDays = Math.max(1, roundDays(inputs.periodLength.meanDays));
   const lutealDays = Math.max(1, roundDays(inputs.lutealLength.meanDays));
   const ovulationDay = addDays(cycleEnd, -lutealDays);
+  const loggedEnd = cycle.endDate;
   const menstrual = {
     start: cycleStart,
-    end: cycle.endDate ?? addDays(cycleStart, predictedBleedDays - 1),
+    end:
+      loggedEnd === undefined
+        ? addDays(cycleStart, predictedBleedDays - 1)
+        : maxDate(cycleStart, minDate(loggedEnd, inputs.today)),
   };
   const bleed = { cycleStart, cycleEnd, predictedBleedDays, menstrual, ovulationDay };
   if (state !== 'current') return bleed;
@@ -311,7 +333,7 @@ export function buildPhaseModel(inputs: PhaseInputs): PhaseModel {
   }
 
   const state = logStateOn(inputs, lastCycle);
-  const windows = windowsFor(lastCycle, inputs.predictedNextStart, inputs, state);
+  const windows = windowsFor(lastCycle, inputs, state);
   if (state === 'stale') {
     return { ...base, menstrualWindow: windows.menstrual, isLate: false, isStale: true };
   }
@@ -504,7 +526,10 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  * `menstrual`. That window ends where she logged the period ending, and only
  * where the learned length puts it when she logged no end, so a long logged
  * bleed is reported as the bleed she recorded rather than as the state of a
- * prediction it happens to run past.
+ * prediction it happens to run past. It ends at today when the end she logged is
+ * later than that, so this is not a fourth way for a state to reach past today:
+ * a date after today never reports `menstrual` on the strength of an entry, and
+ * takes whatever phase the rule for the state gives it instead.
  *
  * - While the log is `current`, every date up to the last day of the bleed the
  *   engine expects next reports a phase, and dates past that return undefined.
@@ -552,15 +577,15 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  * ended. It is also why the predicted bleed of a current log is its own phase
  * rather than `menstrual`: the engine is entitled to say a period is expected on
  * Tuesday, and not entitled to say she was bleeding on a Tuesday that has not
- * arrived.
+ * arrived. An end date typed for next Tuesday does not buy that entitlement
+ * either, which is why the one bound on the logged bleed is today.
  */
 export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate | undefined {
   const cycle = enclosingCycle(inputs.cycles, date);
   if (cycle === undefined) return undefined;
 
-  const cycleEnd = cycle.nextStartDate ?? inputs.predictedNextStart;
   const state = logStateOn(inputs, cycle);
-  const windows = windowsFor(cycle, cycleEnd, inputs, state);
+  const windows = windowsFor(cycle, inputs, state);
   const dayOfCycle = diffDays(cycle.startDate, date) + 1;
 
   const estimate = {
@@ -588,7 +613,7 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
     };
   }
 
-  if (state === 'late' && compareDates(date, cycleEnd) >= 0) {
+  if (state === 'late' && compareDates(date, windows.cycleEnd) >= 0) {
     if (compareDates(date, inputs.today) > 0) return undefined;
     return {
       ...estimate,
@@ -604,14 +629,15 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
     };
   }
 
-  if (cycle.nextStartDate === undefined && compareDates(date, cycleEnd) >= 0) {
-    if (compareDates(date, addDays(cycleEnd, windows.predictedBleedDays - 1)) > 0) return undefined;
-    const dayOfPredictedBleed = diffDays(cycleEnd, date) + 1;
+  if (cycle.nextStartDate === undefined && compareDates(date, windows.cycleEnd) >= 0) {
+    const predictedBleedEnd = addDays(windows.cycleEnd, windows.predictedBleedDays - 1);
+    if (compareDates(date, predictedBleedEnd) > 0) return undefined;
+    const dayOfPredictedBleed = diffDays(windows.cycleEnd, date) + 1;
     return {
       ...estimate,
       phase: 'predicted-menstrual',
       dayOfCycle: dayOfPredictedBleed,
-      summary: predictedBleedSummary(cycleEnd, dayOfPredictedBleed),
+      summary: predictedBleedSummary(windows.cycleEnd, dayOfPredictedBleed),
     };
   }
 

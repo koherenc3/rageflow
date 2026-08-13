@@ -28,6 +28,7 @@ import type {
   CycleLog,
   DayEntry,
   DerivedCycle,
+  FutureDatedStart,
   MissedLogSuspicion,
 } from './types';
 
@@ -84,6 +85,7 @@ function judgeSkip(gapDays: number, acceptedLengths: readonly number[]): SkipJud
 export interface DerivationResult {
   cycles: DerivedCycle[];
   missedLogSuspicions: MissedLogSuspicion[];
+  futureDatedStarts: FutureDatedStart[];
 }
 
 /**
@@ -91,10 +93,35 @@ export interface DerivationResult {
  *
  * The judgement for each gap uses only the cycles before it, which is what she
  * would have seen at the time and keeps the pass free of hindsight.
+ *
+ * `today` decides one thing: which starts have happened. A start dated after it
+ * is not a cycle yet, so it is left out of the derivation and reported in
+ * `futureDatedStarts` instead of anchoring the model to a day nobody has lived
+ * through. Everything downstream is indexed off the last logged start, so one
+ * mistyped year would move the whole model there and take the prediction, the
+ * phases and the calibration replay with it.
+ *
+ * The entry itself is untouched: it stays in the log, it is reported rather than
+ * dropped in silence, and it starts counting on the day it arrives. That is the
+ * same treatment an implausible bleed length gets in `observedPeriodLengths`,
+ * and for the same reason. This is health data she typed in and the app does not
+ * get to overwrite it.
  */
-export function deriveCycles(log: CycleLog): DerivationResult {
-  const starts = collectDates(log.entries, 'period-start');
+export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
   const ends = collectDates(log.entries, 'period-end');
+
+  const starts: ISODate[] = [];
+  const futureDatedStarts: FutureDatedStart[] = [];
+  for (const date of collectDates(log.entries, 'period-start')) {
+    if (compareDates(date, today) > 0) {
+      futureDatedStarts.push({
+        date,
+        message: `A period start is logged for ${date}, which is after today, ${today}. It is not counted as a cycle until that day arrives.`,
+      });
+      continue;
+    }
+    starts.push(date);
+  }
 
   const cycles: DerivedCycle[] = [];
   const missedLogSuspicions: MissedLogSuspicion[] = [];
@@ -161,7 +188,7 @@ export function deriveCycles(log: CycleLog): DerivationResult {
     });
   }
 
-  return { cycles, missedLogSuspicions };
+  return { cycles, missedLogSuspicions, futureDatedStarts };
 }
 
 /** Lengths that should go into the fit: complete cycles that are not suspected skips. */
