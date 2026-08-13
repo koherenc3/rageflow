@@ -321,31 +321,39 @@ function classify(date: ISODate, windows: CycleWindows): CycleWindowPhase {
 /**
  * Phase for any date on or after the first logged period start.
  *
+ * This comment is the contract. `docs/DECISIONS.md` records why it is drawn this
+ * way and `docs/PLAN.md` summarises it for the UI; both defer here rather than
+ * restating the reach, because three overlapping descriptions of one rule is how
+ * this function drifted before.
+ *
  * Returns undefined before the first logged start, and past the end of what the
  * current model describes, where there is genuinely nothing to say.
  *
  * `late` and `stale` are read off today, never off the date being asked about, so
- * a calendar querying next Tuesday is not evidence that anything has stopped.
- * What each state then reaches is different, and the difference is the point.
+ * a calendar querying next Tuesday is not evidence that anything has stopped. The
+ * two rules, in full:
  *
- * `late` reaches forward only, and dates before the predicted start keep their
- * ordinary phase, because nothing has contradicted them: the cycle ran as
- * predicted right up to the day the period was due. Past that date it does reach
- * beyond today. The predicted bleed is the only thing this function claims there,
- * since a cycle whose start has not happened cannot place anything after it, and
- * once today is `late` that bleed is a period the engine predicted and then
- * watched not arrive, so those days report `late` too rather than being painted
- * onto a calendar as a period she never logged.
+ * - While today is `late`, dates from the predicted start through today report
+ *   `late`, dates after today return undefined, and dates before the predicted
+ *   start keep their ordinary phase.
+ * - While today is `stale`, dates from the last logged start through today report
+ *   `stale` except inside the logged bleed, which reports `menstrual`, and dates
+ *   after today return undefined.
  *
- * `stale` reaches backward as well, over every date in the in-progress cycle,
- * and the wider reach is deliberate. Once the silence has run past everything the
- * model can account for, the follicular and fertile readings for those days were
- * indexed off a predicted cycle end that is now known not to have held, so
- * offering them as ordinary phases would be handing back a falsified prediction
- * one calendar cell at a time, which is the fertile window suppression undone.
- * Forward it stops at today: a model with no credible cycle end has nothing to
- * say about tomorrow, so a consumer drawing next month gets undefined cells there
- * exactly as it does past the predicted bleed while the log is current.
+ * Neither reaches past today, because a cycle whose start has not happened cannot
+ * place anything after it, and a model with no credible cycle end has nothing to
+ * say about tomorrow. Both stay contiguous up to today, so a consumer drawing a
+ * month gets a run of cells rather than a scatter of them. Neither claims the
+ * bleed the engine predicted and then watched not arrive: painting those days as
+ * a period would contradict the same model's report on today.
+ *
+ * The one asymmetry is deliberate. `late` leaves the days before the predicted
+ * start alone because nothing has contradicted them, since the cycle ran as
+ * predicted right up to the day the period was due. `stale` covers them, because
+ * once the silence has run past everything the model can account for, the
+ * follicular and fertile readings for those days were indexed off a predicted
+ * cycle end now known not to have held, and offering them as ordinary phases
+ * would be handing back a falsified prediction one calendar cell at a time.
  *
  * What survives both states is the bleed anchored to the real logged start, which
  * is what `buildPhaseModel` keeps as `menstrualWindow`. A logged bleed is a fact
@@ -388,7 +396,8 @@ export function phaseForDate(inputs: PhaseInputs, date: ISODate): PhaseEstimate 
     };
   }
 
-  if (state === 'late' && (date === inputs.today || withinPredictedBleed)) {
+  if (state === 'late' && compareDates(date, cycleEnd) >= 0) {
+    if (compareDates(date, inputs.today) > 0) return undefined;
     return {
       ...estimate,
       phase: 'late',
