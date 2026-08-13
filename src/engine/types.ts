@@ -306,15 +306,29 @@ export interface PhaseEstimate {
 }
 
 /**
- * The windows of the current cycle.
+ * The windows of the current cycle: the one that began at the last logged start
+ * and has not been closed by another.
  *
  * They never overlap. The bleed is indexed forward from the logged start and the
  * fertile window backward from the predicted end, so on a short cycle with a long
  * period the raw ranges collide; `windowsFor` cuts them apart, and drops whatever
  * the state of the log has contradicted, before either this model or
- * `phaseForDate` sees them. These are the only windows there are, so painting
- * these ranges and asking `phaseForDate` day by day give the same answer for
- * every day, in every state of the log.
+ * `phaseForDate` sees them.
+ *
+ * This is where the agreement between the two is stated; the doc comments and
+ * `docs/DECISIONS.md` defer here rather than restating it. For every day of the
+ * current cycle these are the only windows there are, so painting these ranges
+ * and asking `phaseForDate` day by day give the same answer, in every state of
+ * the log. Whenever `fertileWindow` is absent no day of this cycle comes back
+ * `fertile`, and the same holds for `premenstrualWindow`.
+ *
+ * The current cycle is the domain of that invariant because it is the only cycle
+ * this model describes. A completed cycle is bounded by a next start that really
+ * happened, so `phaseForDate` classifies its days against that cycle's own
+ * windows, which are anchored to fact rather than to a prediction and are not
+ * published here: a day of a completed cycle can come back `fertile` while this
+ * model, late today, holds no fertile window at all. Naming that domain is what
+ * makes the guarantee exact, not what softens it.
  */
 export interface PhaseModel {
   lutealLength: LearnedLength;

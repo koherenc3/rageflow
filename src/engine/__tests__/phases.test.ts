@@ -314,9 +314,13 @@ describe('a cycle short enough that the bleed covers the ovulation estimate', ()
   });
 
   it('calls no day of the cycle fertile either', () => {
+    // Asserted as which phase each day is rather than as which one it is not,
+    // so the loop cannot pass by the days having no phase at all.
     for (let i = 0; i < CYCLE_DAYS; i += 1) {
       const date = addDays(lastStart, i);
-      expect(phaseForDate(inputs, date)?.phase, date).not.toBe('fertile');
+      expect(['menstrual', 'follicular', 'luteal', 'premenstrual'], date).toContain(
+        phaseForDate(inputs, date)?.phase
+      );
     }
   });
 
@@ -538,9 +542,19 @@ describe('a period that is late', () => {
   });
 
   it('never calls a completed cycle late', () => {
+    // Named as the phase each day does get rather than as the one it does not,
+    // so the loop cannot pass by those days coming back with no phase at all.
+    // A completed cycle is bounded by a start she logged, so today being late
+    // says nothing about it.
     const inputs = on('2024-04-10');
-    for (const date of ['2024-01-01', '2024-01-16', '2024-01-28', '2024-02-25']) {
-      expect(phaseForDate(inputs, date)?.phase).not.toBe('late');
+    const expectations: Array<[string, string]> = [
+      ['2024-01-01', 'menstrual'],
+      ['2024-01-16', 'fertile'],
+      ['2024-01-28', 'premenstrual'],
+      ['2024-02-25', 'premenstrual'],
+    ];
+    for (const [date, phase] of expectations) {
+      expect(phaseForDate(inputs, date)?.phase, date).toBe(phase);
     }
   });
 });
@@ -714,11 +728,14 @@ describe('the shape a month calendar gets', () => {
 
   it('publishes no window the day-by-day answer disagrees with, in any state', () => {
     // The model and phaseForDate read the same windows, so painting the ranges
-    // and asking day by day cannot differ. Walked in all three states rather
-    // than in the one that changed: while late the model dropped the fertile
-    // window and phaseForDate went on handing the same days back one cell at a
-    // time, and what let that through was checking the state being edited and
-    // not its siblings.
+    // and asking day by day cannot differ about a day of the current cycle,
+    // which is the cycle the model describes and so the domain of the whole
+    // invariant. The walk starts at the last logged start for that reason; the
+    // test below covers what happens before it. Walked in all three states
+    // rather than in the one that changed: while late the model dropped the
+    // fertile window and phaseForDate went on handing the same days back one
+    // cell at a time, and what let that through was checking the state being
+    // edited and not its siblings.
     const inWindow = (date: string, range?: { start: string; end: string }) =>
       range !== undefined && diffDays(range.start, date) >= 0 && diffDays(date, range.end) >= 0;
     for (const today of ['2024-06-10', validThrough, '2024-10-01']) {
@@ -735,17 +752,56 @@ describe('the shape a month calendar gets', () => {
   });
 
   it('never claims a predicted bleed is a logged one, in any state', () => {
-    // The eighth state walked against the same rule. `predicted-menstrual` days
-    // are days the model holds no window for, and the model's menstrual window
-    // is the bleed she logged, so the two never cover the same day.
+    // The eighth state walked against the same rule, with each state carrying
+    // the assertion that state can fail. While the log is current the predicted
+    // bleed is claimed, for exactly the days it covers, and none of them is a
+    // day the model's menstrual window holds, so the bleed she logged and the
+    // one she has not cannot be the same day. Once the predicted start has
+    // passed with nothing logged the claim is spent and no day reports it at
+    // all: asserting that is what the other two states are here for. Skipping
+    // the days that do not match would have made them read as coverage while
+    // only the first could fail.
+    const predictedBleed = walk(
+      predictedNextStart,
+      addDays(predictedNextStart, PERIOD_PRIOR_MEAN_DAYS - 1)
+    );
     for (const today of ['2024-06-10', validThrough, '2024-10-01']) {
       const inputs = on(today);
       const menstrualWindow = buildPhaseModel(inputs).menstrualWindow;
-      for (const date of walk(lastStart, '2024-07-20')) {
-        if (phaseForDate(inputs, date)?.phase !== 'predicted-menstrual') continue;
+      const claimed = walk(lastStart, '2024-07-20').filter(
+        (date) => phaseForDate(inputs, date)?.phase === 'predicted-menstrual'
+      );
+      expect(claimed, today).toEqual(today === '2024-06-10' ? predictedBleed : []);
+      for (const date of claimed) {
         expect(diffDays(date, menstrualWindow?.end as string), `${today} ${date}`).toBeLessThan(0);
       }
     }
+  });
+
+  it('classifies completed cycles against their own windows, whatever today is', () => {
+    // The walk above starts at the last logged start, so it cannot see this
+    // region at all, and a test that cannot reach a region is not evidence
+    // about it. A completed cycle is bounded by a next start that really
+    // happened, so its windows are anchored to fact and today cannot touch
+    // them. That is why the agreement between the model and the per-day answer
+    // is an invariant about the current cycle: the model describes no other.
+    const current = on('2024-06-10');
+    const late = on(validThrough);
+    const stale = on('2024-10-01');
+    expect(buildPhaseModel(late).fertileWindow).toBeUndefined();
+    expect(buildPhaseModel(stale).fertileWindow).toBeUndefined();
+
+    let fertileDays = 0;
+    for (const date of walk(starts[0] as string, addDays(lastStart, -1))) {
+      const phase = phaseForDate(current, date)?.phase;
+      expect(ORDINARY, date).toContain(phase);
+      expect(phaseForDate(late, date)?.phase, date).toBe(phase);
+      expect(phaseForDate(stale, date)?.phase, date).toBe(phase);
+      if (phase === 'fertile') fertileDays += 1;
+    }
+    // Not vacuous: there really are days in there that come back fertile while
+    // the model, late and then stale, publishes no fertile window at all.
+    expect(fertileDays).toBeGreaterThan(0);
   });
 
   it('is contiguous stale from the last logged start to today, and blank after it', () => {

@@ -207,10 +207,11 @@ function logStateOn(inputs: PhaseInputs, cycle: DerivedCycle): LogState {
  * and `stale` get the bleed and nothing else.
  *
  * Doing both here rather than when a day is looked up is what keeps the two
- * outputs honest. The windows this returns are the only windows there are:
- * `buildPhaseModel` publishes exactly these and `phaseForDate` classifies
- * against exactly these, in every state of the log, so a UI painting the ranges
- * and a UI asking day by day cannot disagree about any day.
+ * outputs honest. The windows this returns for the current cycle are the only
+ * windows that cycle has: `buildPhaseModel` publishes exactly these and
+ * `phaseForDate` classifies its days against exactly these, in every state of
+ * the log. `PhaseModel` states that agreement and its domain in full, including
+ * why a completed cycle sits outside it.
  */
 function windowsFor(
   cycleStart: ISODate,
@@ -263,7 +264,7 @@ function daysLateOn(inputs: PhaseInputs): number {
  * window from months ago is wrong. Suppressing it means a consumer cannot show
  * one by forgetting to check a flag. It happens in `windowsFor` rather than
  * here, so `phaseForDate` cannot hand back one calendar cell at a time what this
- * model has withheld.
+ * model has withheld for the cycle it describes.
  *
  * The menstrual window survives both states, because it is indexed forward from
  * a start she actually logged rather than backward from a predicted end. It says
@@ -347,11 +348,16 @@ function menstrualSummary(dayOfCycle: number): string {
  * `windowsFor` has already cut them apart, but it is the same order for the
  * same reason.
  *
- * `follicular` and `luteal` are what is left when no window claims the day, so
- * they are the two phases still reachable when there is no fertile window: the
+ * `follicular` and `luteal` are what is left when no window claims the day: the
  * halves either side of the ovulation estimate, which is a split rather than a
  * range and stays available whether or not the estimate itself can be published.
- * Their wording names the fertile window only when there is one to name.
+ * They are not the only two phases reachable with no fertile window. `menstrual`
+ * always is, and so is `premenstrual` on a cycle short enough that the bleed
+ * swallowed the fertile window, because that cut takes the window it collides
+ * with and leaves the run-up alone. It is `late` that drops both windows
+ * together, so only there does having no fertile window mean having no
+ * premenstrual one. The wording here names the fertile window only when there is
+ * one to name.
  */
 function describeCycleDay(
   date: ISODate,
@@ -460,17 +466,24 @@ function staleSummary(windows: CycleWindows, date: ISODate, isToday: boolean): s
  * date being asked about, so a calendar querying next Tuesday is not evidence
  * that anything has stopped.
  *
+ * All three rules are about the in-progress cycle, which is the only one a state
+ * of the log can reach. A date inside a completed cycle is classified against
+ * that cycle's own windows, laid out between two starts she logged, and today
+ * cannot change what those days were: while late or stale such a day still comes
+ * back `fertile` or `premenstrual` if that is what it was, and `buildPhaseModel`
+ * publishes no window for it either way. `PhaseModel` states that division.
+ *
  * - While the log is `current`, every date up to the last day of the bleed the
  *   engine expects next reports a phase, and dates past that return undefined.
  *   Days from the predicted start onward report `predicted-menstrual`, which is
  *   the one forward-looking claim this function makes and is named so it cannot
  *   be read as a bleed she logged.
  * - While today is `late`, dates from the predicted start through today report
- *   `late`, dates after today return undefined, and dates before the predicted
- *   start keep their ordinary phase, read off the windows the model still holds.
- *   It holds no fertile or premenstrual window while late, so those days come
- *   back `menstrual`, `follicular` or `luteal` and never `fertile` or
- *   `premenstrual`.
+ *   `late`, dates after today return undefined, and dates between the last
+ *   logged start and the predicted start keep their ordinary phase, read off the
+ *   windows the model still holds. It holds no fertile or premenstrual window
+ *   while late, so those days of this cycle come back `menstrual`, `follicular`
+ *   or `luteal` and never `fertile` or `premenstrual`.
  * - While today is `stale`, dates from the last logged start through today report
  *   `stale` except inside the logged bleed, which reports `menstrual`, and dates
  *   after today return undefined.
