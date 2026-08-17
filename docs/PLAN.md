@@ -39,27 +39,35 @@ The original spec had five phases and that was wrong three times over, so there 
 
 `late` and `stale` are read off today, never off a date being asked about, so a month calendar querying next Tuesday is not evidence that anything has stopped. Neither reaches past today, and both stay contiguous up to it, so a month renders as a run of cells and then blanks rather than a scatter. Neither will claim the bleed the engine predicted and then watched not arrive. The bleed she logged survives both, since it is a fact rather than a prediction, and that one rule is what the whole staleness design is stated in: it is also why the bleed still ahead of her is its own state rather than `menstrual`, and why that window ends where she logged the period ending rather than where the learned length would have put it, and stops at today when the end she typed is later than today. A start dated after today is not a cycle at all: it stays in her log and is reported as one the engine has not counted yet. Stopping is also a different state from never having started, and the two read differently. What each state reaches per date is spelled out once, in the doc comment on `phaseForDate`, which is the contract; see [[DECISIONS]] for why it is drawn that way.
 
-## Task 2: local storage, logging, and the prediction UI
+## Task 2: storage, the screens, the PWA, and deploy
+
+Done. Live at https://rageflow.vercel.app, installable to an iPhone home screen.
 
 The first version she can actually use.
 
-- Local-first persistence. IndexedDB or localStorage behind a small repository interface, so storage can be swapped without touching the engine.
-- Logging: one button for "my period started today", a date picker for backfilling, and an optional "it ended" entry. Nothing else.
-- Editing and deleting entries, because she will typo a date.
-- The prediction view: current phase, next period as a range not a date, days until, confidence. Including the `late` and `stale` states, which the engine already emits and which the UI must render as their own thing rather than as phases. A late prediction has no intervals to render and a stale one has no dates at all, by construction. A `predicted-menstrual` day has to look different from a logged period day too, since one is a fact and the other is an estimate.
-- The confirmation flow for suspected missed logs. The engine already emits the question; the UI has to ask it and act on the answer. Same for `futureDatedStarts` and `invalidEntries`: the engine reports the entries it has not counted, and the date picker should not have made them easy to type in the first place.
-- Clinical notes surfaced somewhere calm, not as an alarm.
-- The accuracy view: measured mean absolute error and observed coverage, shown honestly.
-- Cold start states rendered from the engine's tier, including the empty state.
+- Local-first persistence. IndexedDB behind `LogRepository` in `src/storage/`, so storage can be swapped without touching the engine. Versioned from the start: `MIGRATIONS` is an append-only ladder and `DB_VERSION` is derived from its length, because this database holds the only copy of her history and retrofitting a migration mechanism onto it later is not a thing anyone should have to do. `navigator.storage.persist()` is asked once on first run, and the answer is reported rather than assumed.
+- Export and import as a `*.rageflow.json` file, which is gitignored. Her only backup in this version, so the headline test takes a log out through the writer and back in through the parser and the repository, and asserts the engine reads the restored log identically.
+
+  Import merges rather than replaces. That is the decision worth remembering: replacing is the usual meaning of "restore" and it is also the only operation here that can destroy data, since a backup from three months ago would take everything since with it. Merging cannot lose an entry. What it can do is bring back one she deleted, which is two taps to undo.
+
+- Logging: one button for "my period started today", a date field for backfilling, and an optional "it ended" entry. Nothing else.
+- Editing and deleting entries, because she will typo a date. Delete is quiet until it is armed, then confirms.
+- Three screens. Today, Log, History, on a bottom tab bar. The prediction view leads with the 80% range rather than a date, with the point date under it named as the most likely day, and it renders `late` and `stale` as their own states rather than as phases. `NextPeriodCard` takes a type that excludes the stale variant, so the compiler stops anyone rendering a range for a state that has none.
+- `futureDatedStarts` and `invalidEntries` are shown in the engine's own words, on Today as well as on Log, so a date she can see in her log always has an explanation for why it counted for nothing. The date fields cap at today, so a future-dated start is hard to type in the first place.
+- Missed log suspicions are asked on the Log screen, next to the field that answers them. The engine emits the question and the UI asks it; nothing writes a start she did not type.
+- Clinical notes on the History screen, calm, in the engine's non-diagnosing words.
+- The accuracy view: measured error and observed coverage, shown honestly, and absent entirely until there is something measured. `NaN` renders as nothing, never as `0%`.
+- Cold start states from the engine's tier. The empty state is one card rather than two, and shows no dates at all: with nothing logged the model counts forward from today, which is a day she did not choose, so a range there would read as a prediction about her.
+- PWA: manifest, generated icons, service worker, offline shell. Cache-first for content-hashed assets, network-first for everything else, so a cached page can never ask for a chunk a later deploy has deleted.
+- Vercel deploy, Hobby tier.
 
 Constraint carried forward: the input surface stays at period start, optionally period end. See `CLAUDE.md`.
 
-## Task 3: encrypted backup, PWA shell, and deploy
+## Task 3: encrypted cloud backup
 
-- End-to-end encrypted backup. Encrypt in the browser with a key derived from a passphrase she controls, so the server only ever holds ciphertext. Export and import as a `*.rageflow.json` file, which is gitignored.
-- PWA manifest, icons, service worker, offline support. It has to work on a plane and in a basement.
-- Installed-to-home-screen behaviour on iOS: standalone display, safe area insets, no browser chrome.
-- Vercel deploy, custom domain, headers.
+- End-to-end encrypted backup. Encrypt in the browser with a key derived from a passphrase she controls, so the server only ever holds ciphertext.
+- The local file export built in task 2 stays. It is the thing that works with no network and no account, and cloud backup is an addition to it rather than a replacement.
+- A custom domain, if one is wanted.
 
 ## Deferred
 

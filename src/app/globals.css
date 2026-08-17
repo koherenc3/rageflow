@@ -1,23 +1,206 @@
 @import 'tailwindcss';
 
+/*
+ * Scan all of `src`, explicitly.
+ *
+ * Tailwind v4 finds its sources automatically, and where it starts looking
+ * depends on the shape of the checkout it is building in. Locally that reached
+ * the whole of `src`. On Vercel it reached `src/app` and nothing else, so every
+ * class used only in `src/components` was absent from the deployed stylesheet
+ * and the live site rendered as unstyled HTML while every local check passed.
+ *
+ * Naming the root removes the guess. It is one line, and the failure it prevents
+ * is one that no build error, no test and no local screenshot will show you.
+ */
+@source "../";
+
+/*
+ * The palette.
+ *
+ * Both modes are defined in full rather than one being derived from the other,
+ * because this app is opened in bed in the dark as often as in daylight and the
+ * dark mode is not an afterthought. Nothing is pure black or pure white: a
+ * near-black with a little warmth in it reads as calm where #000 reads as a
+ * terminal.
+ *
+ * The phase colours are a set. Each one has a foreground that carries text and a
+ * soft variant that carries a fill behind it, and the pairs are chosen so the
+ * foreground stays legible on its own soft fill in both modes.
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light dark;
+
+  --bg: #faf7f8;
+  --surface: #ffffff;
+  --surface-raised: #f4eef1;
+  --fg: #1b1619;
+  --fg-muted: #6d6167;
+  --fg-faint: #948890;
+  --line: #e7dee2;
+  --line-strong: #d6c9cf;
+
+  --accent: #a4315f;
+  --accent-hover: #8d284f;
+  --accent-soft: #fbecf2;
+  --on-accent: #ffffff;
+
+  --phase-menstrual: #b8365a;
+  --phase-menstrual-soft: #fbe9ee;
+  --phase-follicular: #2c7a6b;
+  --phase-follicular-soft: #e4f3ef;
+  --phase-fertile: #6151c4;
+  --phase-fertile-soft: #ecebfb;
+  --phase-luteal: #8a6220;
+  --phase-luteal-soft: #f7eede;
+  --phase-premenstrual: #a1503a;
+  --phase-premenstrual-soft: #fbeae4;
+  --phase-late: #8a5a10;
+  --phase-late-soft: #f9edd9;
+  --phase-stale: #6d6167;
+  --phase-stale-soft: #efeaec;
+
+  --danger: #b23030;
+  --danger-soft: #fbe9e9;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0b0b0d;
-    --foreground: #ededed;
+    --bg: #100d10;
+    --surface: #191519;
+    --surface-raised: #221d22;
+    --fg: #f1ebee;
+    --fg-muted: #a2959c;
+    --fg-faint: #7c6f76;
+    --line: #2b242b;
+    --line-strong: #3b333b;
+
+    --accent: #f083ab;
+    --accent-hover: #f8a0c0;
+    --accent-soft: #2c1721;
+    --on-accent: #2b0d1a;
+
+    --phase-menstrual: #f28ba7;
+    --phase-menstrual-soft: #2e1a20;
+    --phase-follicular: #6ecdb8;
+    --phase-follicular-soft: #14251f;
+    --phase-fertile: #ab9cf7;
+    --phase-fertile-soft: #1e1a2e;
+    --phase-luteal: #e0b070;
+    --phase-luteal-soft: #2a2117;
+    --phase-premenstrual: #f09d81;
+    --phase-premenstrual-soft: #2c1c17;
+    --phase-late: #e8bd63;
+    --phase-late-soft: #2b2314;
+    --phase-stale: #a2959c;
+    --phase-stale-soft: #232025;
+
+    --danger: #f08a8a;
+    --danger-soft: #2d1818;
   }
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-faint: var(--fg-faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Helvetica Neue',
+    sans-serif;
+}
+
+html {
+  /* Not `100%`: the tab bar is fixed and iOS Safari's toolbar makes vh lie. */
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  /* An overscroll bounce that reveals a different colour behind the page reads
+     as a rendering fault on a home-screen app. */
+  overscroll-behavior-y: none;
+}
+
+/*
+ * Nothing here animates on a reduced-motion setting. The app has very little
+ * motion to begin with, which is the point, but what there is should go.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * Tap targets.
+ *
+ * iOS shows a grey flash on tap that makes a considered layout look cheap, and
+ * it is replaced by the components' own active states.
+ */
+button,
+a,
+input,
+select,
+label {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * The native date field.
+ *
+ * Deliberately close to stock. Every browser lays this control out with its own
+ * metrics, and the parts worth setting are the ones that make it match the rest
+ * of the page: the font, a tap target the size of every other one, and left
+ * alignment on iOS, which centres the value by default.
+ *
+ * The picker indicator is left exactly where the browser put it. Stretching it
+ * over the whole field is a common trick for making the entire control open the
+ * picker, and it costs more than it buys: it swallows the clicks that select the
+ * month, day and year segments, so the field can no longer be typed into. On iOS
+ * tapping the field opens the picker regardless.
+ *
+ * `font-size: 1rem` is the one that is not cosmetic. iOS Safari zooms the page
+ * when a field under 16px takes focus, and it does not zoom back out.
+ */
+input[type='date'] {
+  font-family: inherit;
+  font-size: 1rem;
+  min-height: 3rem;
+}
+
+input[type='date']::-webkit-date-and-time-value {
+  text-align: left;
+  margin: 0;
+}
+
+/* The stock glyph is dark, which is invisible on a dark field. */
+@media (prefers-color-scheme: dark) {
+  input[type='date']::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+    opacity: 0.55;
+  }
+}
+
+:where(button, a, input, select):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
 }

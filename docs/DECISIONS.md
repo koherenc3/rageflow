@@ -241,6 +241,76 @@ The wording had to move too. The tier is driven by volume alone, which is delibe
 
 **Consequences.** The reported mean absolute error and coverage are real out-of-sample numbers and can be shown to her without qualification. The replay is O(n squared) in cycles, which at a few hundred cycles is free.
 
+## The database is versioned from the first release
+
+**Decision.** `src/storage/schema.ts` holds `MIGRATIONS`, an append-only array where index `i` upgrades a database at version `i` to `i + 1`, and `DB_VERSION` is derived from its length. It shipped with one rung in it.
+
+**Reasoning.** A ladder with one rung does nothing that `createObjectStore` in an `onupgradeneeded` handler would not do, so on the day it was written it was pure ceremony. The day it stops being ceremony is the day the shape has to change, and on that day the database already holds the only copy of her history. There is no server to rebuild from and no second device to diff against. Retrofitting a migration mechanism onto live data is a different job from having one, and it is a job done under the pressure of not being allowed to get it wrong.
+
+Deriving `DB_VERSION` from the array length rather than declaring it separately removes the one mistake this design invites: bumping the version and forgetting the rung, or writing the rung and forgetting the version. Neither is possible when there is one number and it is computed.
+
+**Consequences.** Adding a rung is appending a function. The rules that make that safe, never edit, reorder or renumber an existing entry, are stated at the top of the file, because a database in the wild has already run the old code and will only ever run the rungs above where it stopped.
+
+## Import merges rather than replaces
+
+**Decision.** Restoring from a backup file adds every entry the log does not already have, keyed on the day and what was logged about it, and changes nothing that is already there. There is no replace.
+
+**Reasoning.** "Restore" usually means replace, and replace is the only operation in this app that can destroy data. She picks a backup from three months ago, and everything logged since is gone, with no undo and no other copy anywhere. A confirmation dialog with a count in it does not fix that; it just makes the loss consented to.
+
+Merging cannot lose an entry. What it can do is bring back one she deliberately deleted, and that is recoverable on the Log screen in two taps. Given a choice of failure modes, the recoverable one wins.
+
+The compound key `[date, kind]` is what makes this exact rather than approximate. An entry is one fact about one day, so importing the same file twice is a no-op, and there is no merge conflict to resolve because two entries that agree on the day and the kind are the same entry.
+
+**Consequences.** The export and import round trip is closed: export, wipe, import, and the engine reads the restored log identically. That is asserted in `src/storage/__tests__/backup.test.ts` against a seeded synthetic history, not just against a hand-written pair of dates.
+
+## Editing a date refuses rather than overwrites
+
+**Decision.** `move` in `src/storage/repository.ts` reads the destination key in the same transaction that would do the write. If `[to, kind]` is already taken it writes nothing at all, leaves the source where it is, and throws a sentence naming what is in the way: "That date already has a period start. Delete one of them first." If `[from, kind]` holds nothing it is a no-op rather than a write that invents an entry at the destination.
+
+**Reasoning.** This is the same decision as import merging rather than replacing, applied to the other path that can destroy data. A correction is one date field and a Save button, so the collision is not exotic: she logs a start on the wrong day, logs it again correctly, then goes back to fix the first one onto the day she already has. An overwrite there silently collapses two logged starts into one and takes the destination's `meta` with it, which is exactly the thing `merge` and the unrecognised-kind rule exist to prevent an older build from doing.
+
+Refusing costs her one delete. Overwriting costs her a period start she logged, with no undo and no second copy, and the cycle either side of it changes length without her having typed anything. Given a choice of failure modes, the recoverable one wins, and the recoverable one here is refusal.
+
+The message is thrown rather than returned because that is what the layers above already carry: the Log screen's edit row catches it, shows it under the date field, and leaves the row open with her date still in it, so the correction is one more tap rather than a retype.
+
+**Consequences.** `moveEntry` in the store is one of the two actions whose failure the caller reports itself, `importBackup` being the other, so it does not also set `actionError` and say the same thing twice, once beside the row and once at the foot of the screen. Three cases are asserted in `src/storage/__tests__/repository.test.ts`, and two of them assert the log is byte-identical afterwards rather than only that it threw, because a refusal that half wrote is worse than the overwrite it replaced.
+
+## An entry kind this build does not understand is kept
+
+**Decision.** The parser accepts any entry with a string `date` and a string `kind`, stores it, and shows it in the log list. It does not check `kind` against the two this version knows.
+
+**Reasoning.** The data model exists so a later version can add an entry kind without a migration, and `deriveCycles` skips a kind it does not recognise rather than failing on it. So the only thing validating `kind` here would achieve is this build deleting data a later build wrote, on a downgrade or a restore from a newer phone. `meta` is carried across whole for the same reason.
+
+**Consequences.** An unrecognised kind appears in the log list under its own raw name. That is deliberate: a row she cannot see is a row she cannot delete.
+
+## Today is state, and it is re-read
+
+**Decision.** The log store holds today in React state, sets it on mount rather than during render, and re-reads it on `visibilitychange`, on `focus`, and on a 30 second timer.
+
+**Reasoning.** This app is installed to a home screen and left open for days. Capture today once at load and the button that logs "my period started today" writes yesterday's date after midnight, which is the exact failure the whole calendar-date design exists to prevent, reintroduced at the last layer. Setting it on mount rather than during render also keeps it out of the server render, where the host has no idea what day it is where she is.
+
+**Consequences.** Every screen re-renders when the day turns over, which is correct: the day of cycle, the days until, and the late state are all functions of today.
+
+## A failure is shown where it happened, and it is announced
+
+**Decision.** `actionError` in the log store is cleared when the route changes, in render rather than in an effect. A `Note` that carries a failed action sets `role="alert"` through an explicit `alert` prop; a note that carries an observation about her cycle does not.
+
+**Reasoning.** The store is mounted above the router and lives for the whole session, so a message left in it outlives the screen it was set on. It would follow her to the next screen, where she never did the thing that failed, and it would still be sitting there when she came back with nothing behind it. Clearing on the route change closes both, and doing it while rendering rather than in an effect means the screen she is arriving at never paints the old message first.
+
+The announcement is the same problem in the other direction. A refused save moves no focus and changes nothing audible, so with VoiceOver on the failure is silent and reads as a success. `role="alert"` is a separate prop rather than something inferred from the tone colour, because inferring it would make every calm observation about her cycle interrupt whatever she was doing, and would make it possible to get an alert silently wrong by picking a colour.
+
+**Consequences.** A failure is worth nothing after she has navigated away, which is the point. Anything that must outlive a screen has to be state on that screen or a row in the database, not a message in the store.
+
+## The export says the file is ready, not that it was saved
+
+**Decision.** After a successful export the Backup card names the file and tells her to keep it somewhere she will still have it. It does not say it was saved.
+
+**Reasoning.** What actually happened is that a blob was handed to the browser. On iOS that click opens a share sheet she can cancel, and nothing tells the app which she did. "Saved" would be the app asserting a backup exists when it may not, on the one feature standing between her history and losing it, and she would find out it was wrong at the moment she needed the file.
+
+That same asynchrony is why the object URL is revoked a minute after the click rather than on the next tick. Safari picks the download up after the handler has returned, and revoking before it has cancels the save with no file and no error to explain it. Holding a few KB of JSON for a minute costs nothing.
+
+**Consequences.** The wording is longer than a success message usually is, and that is the trade. This is also why an encrypted cloud backup is the next task rather than a nice-to-have: a file she has to keep is a backup she can forget to keep.
+
 ## Related
 
 - [[PLAN]] for what gets built when.
