@@ -103,6 +103,15 @@ Vercel, Hobby tier, `$0/month`. Live at https://rageflow.vercel.app.
 
 Pass `--scope melandod-2824s-projects` on every `vercel` command. Never link or deploy this project to any other scope.
 
+**After a deploy that touched anything visual, check the deployed stylesheet, not just the page.** Vercel's build cache will happily reuse the previous CSS across a deploy, so a fix to it can go out and change nothing:
+
+```
+CSS=$(curl -s https://rageflow.vercel.app/ | grep -oE '/_next/static/css/[a-z0-9]*\.css' | head -1)
+curl -s "https://rageflow.vercel.app$CSS" | wc -c    # must match .next/static/css/*.css
+```
+
+If it does not match, redeploy with `--force`. This happened once and the live site served unstyled HTML while every local check passed.
+
 ## Verifying in a browser
 
 Build and serve the production bundle before checking anything visual: the service worker only registers in production, and the dev server does not exercise it.
