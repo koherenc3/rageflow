@@ -1,6 +1,20 @@
 @import 'tailwindcss';
 
 /*
+ * Scan all of `src`, explicitly.
+ *
+ * Tailwind v4 finds its sources automatically, and where it starts looking
+ * depends on the shape of the checkout it is building in. Locally that reached
+ * the whole of `src`. On Vercel it reached `src/app` and nothing else, so every
+ * class used only in `src/components` was absent from the deployed stylesheet
+ * and the live site rendered as unstyled HTML while every local check passed.
+ *
+ * Naming the root removes the guess. It is one line, and the failure it prevents
+ * is one that no build error, no test and no local screenshot will show you.
+ */
+@source "../";
+
+/*
  * The palette.
  *
  * Both modes are defined in full rather than one being derived from the other,
