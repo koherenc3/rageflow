@@ -38,8 +38,14 @@ export function BackupSection() {
       const link = document.createElement('a');
       link.href = url;
       link.download = backupFileName(today);
+      // In the document, and the URL still alive on the tick after the click.
+      // Safari on iOS is the only browser this app runs in, and it picks the
+      // download up asynchronously: revoke on the same tick and the save is
+      // cancelled with no file and no error to explain it.
+      document.body.append(link);
       link.click();
-      URL.revokeObjectURL(url);
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
       setOutcome({ kind: 'ok', message: `Saved as ${backupFileName(today)}.` });
     } catch (error) {
       setOutcome({

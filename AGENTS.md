@@ -79,6 +79,8 @@ In practice:
 
 Import merges, it does not replace. Replacing is what "restore" usually means and it is also the only operation that can destroy data. Merging can bring back a deleted entry, which is two taps to fix; replacing with a stale file loses everything since, which is not fixable.
 
+Nothing here silently overwrites something she logged, and that rule is not only about import. `move` refuses when the destination day already holds an entry of that kind: it writes nothing, and throws a sentence the Log screen shows next to the row she was editing, so the fix is her deleting one of the two. Deleting is explicit and confirmed; an overwrite would be neither. Any future write path takes the same rule.
+
 An entry kind this build does not understand is stored and shown, never dropped. The data model exists so a later version can add one without a migration, and the engine skips a kind it does not recognise rather than failing on it.
 
 ## Where things live

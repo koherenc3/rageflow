@@ -36,7 +36,14 @@ export interface LogRepository {
   /** Upsert. Logging the same day twice is the same one fact, not two. */
   put(entry: DayEntry): Promise<void>;
   remove(date: ISODate, kind: DayEntryKind): Promise<void>;
-  /** Correct a mistyped date, carrying any `meta` across with it. */
+  /**
+   * Correct a mistyped date, carrying any `meta` across with it.
+   *
+   * Refuses rather than overwrites: if the destination day already holds an
+   * entry of that kind, nothing is written and it throws a message the caller
+   * shows her. Import merges rather than replaces for the same reason, and an
+   * edit is the other path that could quietly destroy something she logged.
+   */
   move(kind: DayEntryKind, from: ISODate, to: ISODate): Promise<void>;
   /** Add what is missing and touch nothing that is already there. */
   merge(entries: readonly DayEntry[]): Promise<MergeResult>;
@@ -71,6 +78,24 @@ function toDayEntry(stored: StoredEntry): DayEntry {
     kind: stored.kind,
     ...(stored.meta === undefined ? {} : { meta: stored.meta }),
   };
+}
+
+/**
+ * Why a correction was refused, in words she can act on.
+ *
+ * An unrecognised kind is named as itself rather than guessed at, the same way
+ * the log list shows one, because a message about "an entry" would not tell her
+ * which row is in the way.
+ */
+function occupiedDateMessage(kind: DayEntryKind): string {
+  switch (kind) {
+    case 'period-start':
+      return 'That date already has a period start. Delete one of them first.';
+    case 'period-end':
+      return 'That date already has a period end. Delete one of them first.';
+    default:
+      return `That date already has an entry of kind ${String(kind)}. Delete one of them first.`;
+  }
 }
 
 /**
@@ -144,6 +169,16 @@ export class IndexedDbLogRepository implements LogRepository {
     const db = await this.db();
     const tx = db.transaction(ENTRY_STORE, 'readwrite');
     const existing = await tx.store.get([from, kind]);
+    // Both reads happen in the transaction that would do the write, so nothing
+    // can take the destination between the check and the move.
+    const occupied = existing === undefined ? undefined : await tx.store.get([to, kind]);
+    if (existing === undefined || occupied !== undefined) {
+      // Neither branch has written anything, so letting the transaction commit
+      // leaves the log exactly as it was.
+      await tx.done;
+      if (occupied !== undefined) throw new Error(occupiedDateMessage(kind));
+      return;
+    }
     // One transaction, so a correction can never land as a delete without the
     // matching write. `meta` rides along: she is fixing the date, not discarding
     // whatever else was attached to the entry.
@@ -151,7 +186,7 @@ export class IndexedDbLogRepository implements LogRepository {
     await tx.store.put({
       date: to,
       kind,
-      ...(existing?.meta === undefined ? {} : { meta: existing.meta }),
+      ...(existing.meta === undefined ? {} : { meta: existing.meta }),
     });
     await tx.done;
   }

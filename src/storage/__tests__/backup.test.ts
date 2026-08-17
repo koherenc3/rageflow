@@ -12,12 +12,12 @@
  */
 
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { deleteDB } from 'idb';
 import { analyze, logFromStartDates } from '@/engine';
 import { generateCycleLengths, startDatesFromLengths } from '@/engine/testing/synthetic';
-import { IndexedDbLogRepository } from '../repository';
 import { DB_NAME } from '../schema';
+import { closeAll, freshRepository, repository, withCleanDatabase } from './support';
 import {
   BACKUP_FORMAT,
   BACKUP_FORMAT_VERSION,
@@ -45,29 +45,7 @@ function syntheticStarts(seed: number, count: number): ISODate[] {
   );
 }
 
-/** Closed before any delete: an open connection blocks one, and that hangs. */
-const opened: IndexedDbLogRepository[] = [];
-
-function repository(): IndexedDbLogRepository {
-  const repo = new IndexedDbLogRepository();
-  opened.push(repo);
-  return repo;
-}
-
-async function closeAll(): Promise<void> {
-  while (opened.length > 0) await opened.pop()?.close();
-}
-
-async function freshRepository(): Promise<IndexedDbLogRepository> {
-  await closeAll();
-  await deleteDB(DB_NAME);
-  return repository();
-}
-
-afterEach(async () => {
-  await closeAll();
-  await deleteDB(DB_NAME);
-});
+withCleanDatabase();
 
 describe('serializeBackup', () => {
   it('wraps the log in an envelope naming what wrote it', () => {

@@ -349,7 +349,7 @@ export function TodayScreen() {
             variant="primary"
             full
             disabled={store.busy}
-            onClick={() => void store.logStart(today)}
+            onClick={() => void store.logStart(today).catch(() => undefined)}
           >
             My period started today
           </Button>
@@ -360,7 +360,7 @@ export function TodayScreen() {
             variant="secondary"
             full
             disabled={store.busy}
-            onClick={() => void store.logEnd(today)}
+            onClick={() => void store.logEnd(today).catch(() => undefined)}
           >
             It ended today
           </Button>

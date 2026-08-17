@@ -263,6 +263,18 @@ The compound key `[date, kind]` is what makes this exact rather than approximate
 
 **Consequences.** The export and import round trip is closed: export, wipe, import, and the engine reads the restored log identically. That is asserted in `src/storage/__tests__/backup.test.ts` against a seeded synthetic history, not just against a hand-written pair of dates.
 
+## Editing a date refuses rather than overwrites
+
+**Decision.** `move` in `src/storage/repository.ts` reads the destination key in the same transaction that would do the write. If `[to, kind]` is already taken it writes nothing at all, leaves the source where it is, and throws a sentence naming what is in the way: "That date already has a period start. Delete one of them first." If `[from, kind]` holds nothing it is a no-op rather than a write that invents an entry at the destination.
+
+**Reasoning.** This is the same decision as import merging rather than replacing, applied to the other path that can destroy data. A correction is one date field and a Save button, so the collision is not exotic: she logs a start on the wrong day, logs it again correctly, then goes back to fix the first one onto the day she already has. An overwrite there silently collapses two logged starts into one and takes the destination's `meta` with it, which is exactly the thing `merge` and the unrecognised-kind rule exist to prevent an older build from doing.
+
+Refusing costs her one delete. Overwriting costs her a period start she logged, with no undo and no second copy, and the cycle either side of it changes length without her having typed anything. Given a choice of failure modes, the recoverable one wins, and the recoverable one here is refusal.
+
+The message is thrown rather than returned because that is what the layers above already carry: the Log screen's edit row catches it, shows it under the date field, and leaves the row open with her date still in it, so the correction is one more tap rather than a retype.
+
+**Consequences.** `moveEntry` in the store is the second action whose failure the caller reports, so it does not also set the shared `actionError` and reappear on another screen. Three cases are asserted in `src/storage/__tests__/repository.test.ts`, and two of them assert the log is byte-identical afterwards rather than only that it threw, because a refusal that half wrote is worse than the overwrite it replaced.
+
 ## An entry kind this build does not understand is kept
 
 **Decision.** The parser accepts any entry with a string `date` and a string `kind`, stores it, and shows it in the log list. It does not check `kind` against the two this version knows.

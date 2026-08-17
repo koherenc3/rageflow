@@ -57,8 +57,17 @@ export interface LogStore {
   logStart(date: ISODate): Promise<void>;
   logEnd(date: ISODate): Promise<void>;
   removeEntry(date: ISODate, kind: DayEntryKind): Promise<void>;
+  /**
+   * Correct a date. Throws with a readable message when the repository refuses,
+   * and leaves `actionError` alone: this one is reported next to the row being
+   * edited, which is where she is looking, rather than at the foot of the screen.
+   */
   moveEntry(kind: DayEntryKind, from: ISODate, to: ISODate): Promise<void>;
-  /** Merge a backup file in. Returns what it did, or throws with a readable message. */
+  /**
+   * Merge a backup file in. Returns what it did, or throws with a readable
+   * message. Like `moveEntry`, the caller reports the failure, so it does not
+   * also land in `actionError` and reappear on another screen.
+   */
   importBackup(text: string): Promise<MergeResult & { unreadableCount: number }>;
   /** The file contents. Building it is the store's job; saving it is the caller's. */
   exportBackup(): string;
@@ -74,7 +83,12 @@ export function useLogStore(): LogStore {
   return store;
 }
 
-function messageOf(error: unknown, fallback: string): string {
+/**
+ * What a failed action says for itself, or a fallback when it has nothing worth
+ * showing. The repository and the parser both throw sentences written for her,
+ * and those are shown as they are rather than reworded at each call site.
+ */
+export function messageOf(error: unknown, fallback: string): string {
   return error instanceof Error && error.message !== '' ? error.message : fallback;
 }
 
@@ -167,22 +181,36 @@ export function LogProvider({
    * is what is in the database, so a write that half succeeded cannot leave the
    * UI showing an entry that is not there.
    */
-  const run = useCallback(
-    async <T,>(action: () => Promise<T>, fallbackMessage: string): Promise<T> => {
+  const perform = useCallback(
+    async <T,>(action: () => Promise<T>): Promise<T> => {
       setBusy(true);
       try {
         const result = await action();
         setLog(await repo.load());
         setActionError(undefined);
         return result;
-      } catch (error) {
-        setActionError(messageOf(error, fallbackMessage));
-        throw error;
       } finally {
         setBusy(false);
       }
     },
     [repo]
+  );
+
+  /**
+   * `perform`, plus the failure in the shared field the screens render.
+   *
+   * An action whose caller shows the failure itself uses `perform` directly. Two
+   * places would otherwise report the same error, and the shared field outlives
+   * the screen it was set on, so it would surface again somewhere she never did
+   * the thing that failed.
+   */
+  const run = useCallback(
+    <T,>(action: () => Promise<T>, fallbackMessage: string): Promise<T> =>
+      perform(action).catch((error: unknown) => {
+        setActionError(messageOf(error, fallbackMessage));
+        throw error;
+      }),
+    [perform]
   );
 
   const put = useCallback(
@@ -209,18 +237,18 @@ export function LogProvider({
 
   const moveEntry = useCallback(
     (kind: DayEntryKind, from: ISODate, to: ISODate) =>
-      run(() => repo.move(kind, from, to), 'That date could not be changed.').then(() => undefined),
-    [repo, run]
+      perform(() => repo.move(kind, from, to)).then(() => undefined),
+    [repo, perform]
   );
 
   const importBackup = useCallback(
     (text: string) =>
-      run(async () => {
+      perform(async () => {
         const parsed = parseBackup(text);
         const merged = await repo.merge(parsed.entries);
         return { ...merged, unreadableCount: parsed.unreadableCount };
-      }, 'That backup could not be restored.'),
-    [repo, run]
+      }),
+    [repo, perform]
   );
 
   const exportBackup = useCallback(() => {

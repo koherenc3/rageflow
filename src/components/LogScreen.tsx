@@ -24,7 +24,7 @@ import { useState } from 'react';
 import { compareDates, isValidISODate, type ISODate } from '@/engine/date';
 import type { CycleAnalysis, DayEntry, DayEntryKind } from '@/engine/types';
 import { formatDay, formatDayWithWeekday, humanizeDates } from '@/lib/display';
-import { useLogStore, type LogStore } from '@/lib/log-store';
+import { messageOf, useLogStore, type LogStore } from '@/lib/log-store';
 import { LoadErrorScreen, LoadingScreen, Screen } from './Screen';
 import { Button, Card, CardLabel, Disclaimer, Note, SectionHeading } from './ui';
 
@@ -69,6 +69,9 @@ function DateField({
 function EntryRow({ entry, today, store }: { entry: DayEntry; today: ISODate; store: LogStore }) {
   const [mode, setMode] = useState<'idle' | 'editing' | 'confirming-delete'>('idle');
   const [draft, setDraft] = useState<string>(entry.date);
+  // A correction the repository refused, shown against the row it was refused
+  // for. She is looking at this field, not at the foot of the screen.
+  const [editError, setEditError] = useState<string | undefined>(undefined);
   const readable = isValidISODate(entry.date);
   const draftValid = isValidISODate(draft) && compareDates(draft, today) <= 0;
 
@@ -88,6 +91,7 @@ function EntryRow({ entry, today, store }: { entry: DayEntry; today: ISODate; st
               className="min-h-[2.75rem] px-3 text-sm"
               onClick={() => {
                 setDraft(readable ? entry.date : today);
+                setEditError(undefined);
                 setMode('editing');
               }}
             >
@@ -112,21 +116,40 @@ function EntryRow({ entry, today, store }: { entry: DayEntry; today: ISODate; st
           <DateField
             value={draft}
             max={today}
-            onChange={setDraft}
+            onChange={(next) => {
+              setEditError(undefined);
+              setDraft(next);
+            }}
             label={`New date for ${kindLabel(entry.kind).toLowerCase()}`}
           />
+          {editError !== undefined && <Note tone="menstrual">{editError}</Note>}
           <div className="flex gap-2">
             <Button
               variant="primary"
               className="flex-1"
               disabled={!draftValid || store.busy}
               onClick={() => {
-                void store.moveEntry(entry.kind, entry.date, draft).then(() => setMode('idle'));
+                setEditError(undefined);
+                // A refused correction leaves the row open with her date still
+                // in it, so the fix is one more tap rather than a retype.
+                void store
+                  .moveEntry(entry.kind, entry.date, draft)
+                  .then(() => setMode('idle'))
+                  .catch((error: unknown) => {
+                    setEditError(messageOf(error, 'That date could not be changed.'));
+                  });
               }}
             >
               Save
             </Button>
-            <Button variant="secondary" className="flex-1" onClick={() => setMode('idle')}>
+            <Button
+              variant="secondary"
+              className="flex-1"
+              onClick={() => {
+                setEditError(undefined);
+                setMode('idle');
+              }}
+            >
               Cancel
             </Button>
           </div>
@@ -145,7 +168,12 @@ function EntryRow({ entry, today, store }: { entry: DayEntry; today: ISODate; st
               className="flex-1"
               disabled={store.busy}
               onClick={() => {
-                void store.removeEntry(entry.date, entry.kind).then(() => setMode('idle'));
+                // The failure is already on screen as a note, so the rejection
+                // is absorbed here rather than left for the browser to log.
+                void store
+                  .removeEntry(entry.date, entry.kind)
+                  .then(() => setMode('idle'))
+                  .catch(() => undefined);
               }}
             >
               Delete
@@ -235,7 +263,7 @@ export function LogScreen() {
             variant="primary"
             full
             disabled={!startValid || store.busy}
-            onClick={() => void store.logStart(start)}
+            onClick={() => void store.logStart(start).catch(() => undefined)}
           >
             Save start date
           </Button>
@@ -253,7 +281,7 @@ export function LogScreen() {
             variant="secondary"
             full
             disabled={!endValid || store.busy}
-            onClick={() => void store.logEnd(end)}
+            onClick={() => void store.logEnd(end).catch(() => undefined)}
           >
             Save end date
           </Button>

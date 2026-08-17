@@ -10,38 +10,13 @@
  */
 
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
-import { deleteDB } from 'idb';
-import { IndexedDbLogRepository, sortEntries } from '../repository';
-import { DB_NAME, DB_VERSION, MIGRATIONS } from '../schema';
+import { describe, expect, it } from 'vitest';
+import { sortEntries } from '../repository';
+import { DB_VERSION, MIGRATIONS } from '../schema';
+import { freshRepository, repository, withCleanDatabase } from './support';
 import type { DayEntry } from '@/engine/types';
 
-/**
- * Every connection this file opens, so it can be closed before the database is
- * deleted. An open connection blocks a delete, and a blocked delete hangs.
- */
-const opened: IndexedDbLogRepository[] = [];
-
-function repository(): IndexedDbLogRepository {
-  const repo = new IndexedDbLogRepository();
-  opened.push(repo);
-  return repo;
-}
-
-async function closeAll(): Promise<void> {
-  while (opened.length > 0) await opened.pop()?.close();
-}
-
-async function freshRepository(): Promise<IndexedDbLogRepository> {
-  await closeAll();
-  await deleteDB(DB_NAME);
-  return repository();
-}
-
-afterEach(async () => {
-  await closeAll();
-  await deleteDB(DB_NAME);
-});
+withCleanDatabase();
 
 describe('schema', () => {
   it('derives the database version from the migration ladder', () => {
@@ -106,6 +81,50 @@ describe('IndexedDbLogRepository', () => {
     expect(log.entries).toEqual([
       { date: '2024-01-02', kind: 'period-start', meta: { note: 'kept' } },
     ]);
+  });
+
+  it('refuses a move onto a day that already has that kind, and changes nothing', async () => {
+    // The destination is the only entry a correction could destroy, and there is
+    // no second copy of her history. Refusing costs her one delete; overwriting
+    // costs her a period start she logged and cannot get back.
+    const repo = await freshRepository();
+    await repo.put({ date: '2024-01-01', kind: 'period-start', meta: { note: 'source' } });
+    await repo.put({ date: '2024-01-29', kind: 'period-start', meta: { note: 'destination' } });
+
+    await expect(repo.move('period-start', '2024-01-01', '2024-01-29')).rejects.toThrow(
+      /already has a period start/
+    );
+
+    const log = await repo.load();
+    expect(log.entries).toEqual([
+      { date: '2024-01-01', kind: 'period-start', meta: { note: 'source' } },
+      { date: '2024-01-29', kind: 'period-start', meta: { note: 'destination' } },
+    ]);
+  });
+
+  it('still moves onto a day that only has the other kind', async () => {
+    const repo = await freshRepository();
+    await repo.put({ date: '2024-01-01', kind: 'period-start' });
+    await repo.put({ date: '2024-01-29', kind: 'period-end' });
+
+    await repo.move('period-start', '2024-01-01', '2024-01-29');
+
+    const log = await repo.load();
+    expect(log.entries).toEqual([
+      { date: '2024-01-29', kind: 'period-end' },
+      { date: '2024-01-29', kind: 'period-start' },
+    ]);
+  });
+
+  it('writes nothing when there is no entry to move', async () => {
+    const repo = await freshRepository();
+    await repo.put({ date: '2024-01-01', kind: 'period-end' });
+
+    await repo.move('period-start', '2024-01-01', '2024-01-02');
+
+    // No entry invented at the destination, and the day she did log untouched.
+    const log = await repo.load();
+    expect(log.entries).toEqual([{ date: '2024-01-01', kind: 'period-end' }]);
   });
 
   it('leaves the log alone when a move goes nowhere', async () => {
