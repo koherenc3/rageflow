@@ -273,7 +273,7 @@ Refusing costs her one delete. Overwriting costs her a period start she logged, 
 
 The message is thrown rather than returned because that is what the layers above already carry: the Log screen's edit row catches it, shows it under the date field, and leaves the row open with her date still in it, so the correction is one more tap rather than a retype.
 
-**Consequences.** `moveEntry` in the store is the second action whose failure the caller reports, so it does not also set the shared `actionError` and reappear on another screen. Three cases are asserted in `src/storage/__tests__/repository.test.ts`, and two of them assert the log is byte-identical afterwards rather than only that it threw, because a refusal that half wrote is worse than the overwrite it replaced.
+**Consequences.** `moveEntry` in the store is one of the two actions whose failure the caller reports itself, `importBackup` being the other, so it does not also set `actionError` and say the same thing twice, once beside the row and once at the foot of the screen. Three cases are asserted in `src/storage/__tests__/repository.test.ts`, and two of them assert the log is byte-identical afterwards rather than only that it threw, because a refusal that half wrote is worse than the overwrite it replaced.
 
 ## An entry kind this build does not understand is kept
 
@@ -290,6 +290,26 @@ The message is thrown rather than returned because that is what the layers above
 **Reasoning.** This app is installed to a home screen and left open for days. Capture today once at load and the button that logs "my period started today" writes yesterday's date after midnight, which is the exact failure the whole calendar-date design exists to prevent, reintroduced at the last layer. Setting it on mount rather than during render also keeps it out of the server render, where the host has no idea what day it is where she is.
 
 **Consequences.** Every screen re-renders when the day turns over, which is correct: the day of cycle, the days until, and the late state are all functions of today.
+
+## A failure is shown where it happened, and it is announced
+
+**Decision.** `actionError` in the log store is cleared when the route changes, in render rather than in an effect. A `Note` that carries a failed action sets `role="alert"` through an explicit `alert` prop; a note that carries an observation about her cycle does not.
+
+**Reasoning.** The store is mounted above the router and lives for the whole session, so a message left in it outlives the screen it was set on. It would follow her to the next screen, where she never did the thing that failed, and it would still be sitting there when she came back with nothing behind it. Clearing on the route change closes both, and doing it while rendering rather than in an effect means the screen she is arriving at never paints the old message first.
+
+The announcement is the same problem in the other direction. A refused save moves no focus and changes nothing audible, so with VoiceOver on the failure is silent and reads as a success. `role="alert"` is a separate prop rather than something inferred from the tone colour, because inferring it would make every calm observation about her cycle interrupt whatever she was doing, and would make it possible to get an alert silently wrong by picking a colour.
+
+**Consequences.** A failure is worth nothing after she has navigated away, which is the point. Anything that must outlive a screen has to be state on that screen or a row in the database, not a message in the store.
+
+## The export says the file is ready, not that it was saved
+
+**Decision.** After a successful export the Backup card names the file and tells her to keep it somewhere she will still have it. It does not say it was saved.
+
+**Reasoning.** What actually happened is that a blob was handed to the browser. On iOS that click opens a share sheet she can cancel, and nothing tells the app which she did. "Saved" would be the app asserting a backup exists when it may not, on the one feature standing between her history and losing it, and she would find out it was wrong at the moment she needed the file.
+
+That same asynchrony is why the object URL is revoked a minute after the click rather than on the next tick. Safari picks the download up after the handler has returned, and revoking before it has cancels the save with no file and no error to explain it. Holding a few KB of JSON for a minute costs nothing.
+
+**Consequences.** The wording is longer than a success message usually is, and that is the trade. This is also why an encrypted cloud backup is the next task rather than a nice-to-have: a file she has to keep is a backup she can forget to keep.
 
 ## Related
 

@@ -33,6 +33,13 @@
  * no fetch to any origin but this one.
  */
 
+/**
+ * Bump this whenever what is kept in a cache changes shape, not merely when the
+ * app does. The names below are derived from it, and `activate` deletes every
+ * `rageflow-` cache that is not one of them, so a bump is how a worker written
+ * against the old layout stops being read by this one. v1 kept both kinds of
+ * thing in a single cache.
+ */
 const VERSION = 'v2';
 const PREFIX = 'rageflow-';
 const SHELL_CACHE = `${PREFIX}shell-${VERSION}`;

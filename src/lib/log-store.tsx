@@ -71,7 +71,7 @@ export interface LogStore {
   /**
    * Merge a backup file in. Returns what it did, or throws with a readable
    * message. Like `moveEntry`, the caller reports the failure, so it does not
-   * also land in `actionError` and reappear on another screen.
+   * also land in `actionError` and say the same thing twice.
    */
   importBackup(text: string): Promise<MergeResult & { unreadableCount: number }>;
   /** The file contents. Building it is the store's job; saving it is the caller's. */

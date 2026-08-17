@@ -25,6 +25,7 @@ npm run test:watch   # vitest in watch mode
 npm run lint         # eslint
 npm run typecheck    # tsc --noEmit
 npm run format       # prettier --write
+npm run icons        # regenerate public/icons from scripts/generate-icons.mjs
 ```
 
 `npm run build`, `npm test`, and `npm run lint` must all pass before anything ships.
@@ -71,6 +72,12 @@ In practice:
 - The headline for the next period is the 80% range. The point date appears under it, named as the most likely day.
 - Engine sentences are shown as written. `humanizeDates` respells the dates in them and moves no other word; it is a substitution over `YYYY-MM-DD`, not a paraphrase.
 
+The same restraint applies to what the app claims about itself:
+
+- Say what happened, never what you hope happened. The export hands the file to the browser and says the backup is ready, not that it was saved, because on iOS the click opens a share sheet she can cancel and nothing tells the app either way.
+- A failure belongs to where and when it happened. `actionError` is dropped when the route changes, so a message never follows her to a screen where she did nothing, and it is never still waiting when she comes back.
+- A note that reports a failed action passes `alert` to `Note`, which sets `role="alert"`. A refused save moves no focus and changes nothing audible, so with VoiceOver on an unannounced failure reads as a success. Everything the engine merely observes stays quiet.
+
 ## Storage
 
 `src/storage/` is the only thing that reads or writes her history. IndexedDB via `idb`, one connection per page.
@@ -82,6 +89,16 @@ Import merges, it does not replace. Replacing is what "restore" usually means an
 Nothing here silently overwrites something she logged, and that rule is not only about import. `move` refuses when the destination day already holds an entry of that kind: it writes nothing, and throws a sentence the Log screen shows next to the row she was editing, so the fix is her deleting one of the two. Deleting is explicit and confirmed; an overwrite would be neither. Any future write path takes the same rule.
 
 An entry kind this build does not understand is stored and shown, never dropped. The data model exists so a later version can add one without a migration, and the engine skips a kind it does not recognise rather than failing on it.
+
+## Styling
+
+`src/app/globals.css` is the whole stylesheet: the palette, the phase tones, and the handful of element rules Tailwind utilities cannot express.
+
+`@source "../"` at the top of it names the scan root. Do not remove it. Tailwind 4 detects sources automatically and where it starts depends on the shape of the checkout: locally it reached all of `src`, on Vercel it reached `src/app` alone, so every class used only in `src/components` was missing from the deployed stylesheet while the build, the types, the tests and the local screenshots were all fine.
+
+Every phase tone needs both a `--phase-<tone>` and a `--phase-<tone>-soft`, in the light block and in the dark one, or the card renders transparent with invisible text. A token defined only in the dark block is unset in daylight. `src/lib/__tests__/theme.test.ts` reads the file and pins all three of these, because none of them breaks a build.
+
+Leave `input[type='date']::-webkit-calendar-picker-indicator` where the browser puts it. Stretching it across the field to widen the tap target lays it over the month, day and year segments and swallows the clicks that select them, so the date cannot be typed at all. The only override on it is the dark-scheme filter, which changes its colour and not its box.
 
 ## Where things live
 
