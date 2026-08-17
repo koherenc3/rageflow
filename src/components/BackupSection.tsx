@@ -38,14 +38,15 @@ export function BackupSection() {
       const link = document.createElement('a');
       link.href = url;
       link.download = backupFileName(today);
-      // In the document, and the URL still alive on the tick after the click.
-      // Safari on iOS is the only browser this app runs in, and it picks the
-      // download up asynchronously: revoke on the same tick and the save is
-      // cancelled with no file and no error to explain it.
+      // In the document, and the URL still alive long after the click. Safari on
+      // iOS is the only browser this app runs in, and it picks the download up
+      // asynchronously: revoke before it has and the save is cancelled with no
+      // file and no error to explain it. A minute is far longer than that takes,
+      // and holding a few KB of JSON for a minute costs nothing.
       document.body.append(link);
       link.click();
       link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setOutcome({ kind: 'ok', message: `Saved as ${backupFileName(today)}.` });
     } catch (error) {
       setOutcome({

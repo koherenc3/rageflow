@@ -26,6 +26,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { usePathname } from 'next/navigation';
 import { analyze, todayLocal } from '@/engine';
 import type { CycleAnalysis, CycleLog, DayEntry, DayEntryKind } from '@/engine/types';
 import type { ISODate } from '@/engine/date';
@@ -44,7 +45,11 @@ export interface LogStore {
    * history that looks like a fresh start.
    */
   loadError?: string;
-  /** Set by the last action that failed. Cleared when the next one succeeds. */
+  /**
+   * Set by the last action that failed on the screen being shown. Cleared when
+   * the next action succeeds, and absent on every other screen: a failure
+   * belongs where she did the thing that failed and nowhere else.
+   */
   actionError?: string;
   log?: CycleLog;
   analysis?: CycleAnalysis;
@@ -114,9 +119,21 @@ export function LogProvider({
   const [today, setToday] = useState<ISODate | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
-  const [actionError, setActionError] = useState<string | undefined>(undefined);
+  // Tagged with the screen it happened on. The store outlives every screen, so
+  // an untagged message would still be sitting there when she opens another one.
+  const [actionError, setActionError] = useState<{ screen: string; message: string } | undefined>(
+    undefined
+  );
   const [busy, setBusy] = useState(false);
   const [persistence, setPersistence] = useState<PersistenceState | 'unknown'>('unknown');
+
+  const pathname = usePathname();
+  // Held in a ref rather than closed over, so navigating between screens does
+  // not rebuild every action callback below.
+  const screenRef = useRef(pathname);
+  useEffect(() => {
+    screenRef.current = pathname;
+  }, [pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,17 +214,20 @@ export function LogProvider({
   );
 
   /**
-   * `perform`, plus the failure in the shared field the screens render.
+   * `perform`, plus the failure in the field the screen renders at its foot.
    *
-   * An action whose caller shows the failure itself uses `perform` directly. Two
-   * places would otherwise report the same error, and the shared field outlives
-   * the screen it was set on, so it would surface again somewhere she never did
-   * the thing that failed.
+   * The message is tagged with the screen she was on, and only that screen shows
+   * it. The store is mounted above the router and lives for the whole session,
+   * so an untagged message would follow her to the next screen, where she never
+   * did the thing that failed.
+   *
+   * An action whose caller shows the failure itself uses `perform` directly, so
+   * that two places do not report the same error.
    */
   const run = useCallback(
     <T,>(action: () => Promise<T>, fallbackMessage: string): Promise<T> =>
       perform(action).catch((error: unknown) => {
-        setActionError(messageOf(error, fallbackMessage));
+        setActionError({ screen: screenRef.current, message: messageOf(error, fallbackMessage) });
         throw error;
       }),
     [perform]
@@ -263,11 +283,14 @@ export function LogProvider({
     [log, today]
   );
 
+  const visibleActionError =
+    actionError !== undefined && actionError.screen === pathname ? actionError.message : undefined;
+
   const value = useMemo<LogStore>(
     () => ({
       loading,
       ...(loadError === undefined ? {} : { loadError }),
-      ...(actionError === undefined ? {} : { actionError }),
+      ...(visibleActionError === undefined ? {} : { actionError: visibleActionError }),
       ...(log === undefined ? {} : { log }),
       ...(analysis === undefined ? {} : { analysis }),
       ...(today === undefined ? {} : { today }),
@@ -283,7 +306,7 @@ export function LogProvider({
     [
       loading,
       loadError,
-      actionError,
+      visibleActionError,
       log,
       analysis,
       today,

@@ -16,10 +16,15 @@
  *   asking for a chunk a later deploy has deleted. Offline she gets the last
  *   version she loaded, whole.
  *
- * The two live in separate caches because only one of them can grow. Every
- * deploy publishes chunks at new URLs, so a cache-first asset cache would keep
- * every build it ever saw: the shell is a fixed three entries, the assets are
- * capped, and anything left over from an older worker is deleted on activate.
+ * The two live in separate caches because they grow for different reasons and
+ * are worth different amounts. Every deploy publishes chunks at new URLs, so a
+ * cache-first asset cache would keep every build it ever saw. The shell cache is
+ * not the fixed three routes either: it also takes the manifest, the icons, and
+ * one entry per prefetched route payload, which is a new URL each build. So both
+ * are capped, oldest first, and anything left over from an older worker is
+ * deleted on activate. The three screen documents are pinned against the shell
+ * cap, because they are what an offline cold launch has to render.
+ *
  * Storage here is not free, it is the same origin quota as the IndexedDB holding
  * the only copy of her history, and losing that to a pile of dead JavaScript
  * would be an absurd way to lose it.
@@ -44,15 +49,58 @@ const CURRENT_CACHES = [SHELL_CACHE, ASSET_CACHE];
  */
 const MAX_ASSETS = 80;
 
+/**
+ * How many of the shell cache's other entries to keep, on top of the three
+ * screens, which never count against it and are never evicted.
+ */
+const MAX_SHELL = 24;
+
 /** The three screens, so a cold launch offline has something to render. */
 const SHELL = ['/', '/log', '/history'];
 
-async function trimAssets() {
-  const cache = await caches.open(ASSET_CACHE);
+/**
+ * A screen document, as opposed to the route payload the router prefetches for
+ * the same screen, which carries a query and is a separate cache entry.
+ */
+function isShellDocument(request) {
+  const url = new URL(request.url);
+  return url.search === '' && SHELL.includes(url.pathname);
+}
+
+async function trim(name, max, isPinned) {
+  const cache = await caches.open(name);
   const keys = await cache.keys();
-  const excess = keys.length - MAX_ASSETS;
+  const evictable = keys.filter((request) => !isPinned(request));
+  const excess = evictable.length - max;
   for (let index = 0; index < excess; index += 1) {
-    await cache.delete(keys[index]);
+    await cache.delete(evictable[index]);
+  }
+}
+
+function trimAssets() {
+  return trim(ASSET_CACHE, MAX_ASSETS, () => false);
+}
+
+function trimShell() {
+  return trim(SHELL_CACHE, MAX_SHELL, isShellDocument);
+}
+
+/**
+ * Housekeeping, off the path the page is waiting on.
+ *
+ * A trim is worth doing eventually and worth nothing immediately: the response
+ * is already in hand, and making her wait for a full enumeration of the cache
+ * before she gets it would be a cost with no matching benefit. `waitUntil` keeps
+ * the worker alive long enough to finish, and a failed trim stays a failed trim
+ * rather than becoming a failed fetch.
+ */
+function afterwards(event, work) {
+  const settled = work.catch(() => undefined);
+  try {
+    event.waitUntil(settled);
+  } catch {
+    // The event is no longer active, so the worker is not obliged to stay up for
+    // this. It runs anyway if it can, and activate does it again regardless.
   }
 }
 
@@ -84,6 +132,7 @@ self.addEventListener('activate', (event) => {
           .map((name) => caches.delete(name))
       );
       await trimAssets();
+      await trimShell();
       await self.clients.claim();
     })()
   );
@@ -93,24 +142,25 @@ function isImmutableAsset(url) {
   return url.pathname.startsWith('/_next/static/');
 }
 
-async function cacheFirst(request) {
+async function cacheFirst(request, event) {
   const cache = await caches.open(ASSET_CACHE);
   const cached = await cache.match(request);
   if (cached !== undefined) return cached;
   const response = await fetch(request);
   if (response.ok) {
     await cache.put(request, response.clone());
-    await trimAssets();
+    afterwards(event, trimAssets());
   }
   return response;
 }
 
-async function networkFirst(request) {
+async function networkFirst(request, event) {
   const cache = await caches.open(SHELL_CACHE);
   try {
     const response = await fetch(request);
     if (response.ok && response.type === 'basic') {
       await cache.put(request, response.clone());
+      afterwards(event, trimShell());
     }
     return response;
   } catch (error) {
@@ -133,5 +183,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  event.respondWith(isImmutableAsset(url) ? cacheFirst(request) : networkFirst(request));
+  event.respondWith(
+    isImmutableAsset(url) ? cacheFirst(request, event) : networkFirst(request, event)
+  );
 });
