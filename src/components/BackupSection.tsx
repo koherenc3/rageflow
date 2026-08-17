@@ -47,7 +47,15 @@ export function BackupSection() {
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setOutcome({ kind: 'ok', message: `Saved as ${backupFileName(today)}.` });
+      // What just happened is that the file was handed to the browser, and that
+      // is all this may claim. On iOS the click opens a share sheet she can
+      // cancel, and nothing here is told either way. Saying "saved" would be the
+      // app asserting a backup exists when it may not, on the one feature
+      // standing between her history and losing it.
+      setOutcome({
+        kind: 'ok',
+        message: `Backup ready as ${backupFileName(today)}. Save it somewhere you will still have it if you lose this phone.`,
+      });
     } catch (error) {
       setOutcome({
         kind: 'error',

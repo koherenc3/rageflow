@@ -100,17 +100,29 @@ export function Stat({ label, value }: { label: string; value: string | undefine
   );
 }
 
-/** A calm, non-alarming note. Used for everything the engine merely observes. */
+/**
+ * A calm, non-alarming note. Used for everything the engine merely observes.
+ *
+ * `alert` is what a screen reader hears, and it is a separate prop rather than a
+ * reading of the tone colour so a caller cannot get it silently wrong. A note
+ * that reports a failed action sets it: with VoiceOver on, a refused save moves
+ * no focus and changes nothing audible, so an unannounced failure reads as a
+ * success. Everything else stays quiet, because an observation about her cycle
+ * has no business interrupting whatever she is doing.
+ */
 export function Note({
   children,
   tone = 'stale',
+  alert = false,
 }: {
   children: ReactNode;
   tone?: 'stale' | 'late' | 'menstrual';
+  alert?: boolean;
 }) {
   return (
     <p
       className="rounded-2xl px-4 py-3 text-sm leading-relaxed"
+      {...(alert ? { role: 'alert' } : {})}
       style={{
         backgroundColor: `var(--phase-${tone}-soft)`,
         color: `var(--phase-${tone})`,

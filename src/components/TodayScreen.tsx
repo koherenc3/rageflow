@@ -376,7 +376,11 @@ export function TodayScreen() {
         )}
       </div>
 
-      {store.actionError !== undefined && <Note tone="menstrual">{store.actionError}</Note>}
+      {store.actionError !== undefined && (
+        <Note tone="menstrual" alert>
+          {store.actionError}
+        </Note>
+      )}
 
       <Disclaimer />
     </Screen>

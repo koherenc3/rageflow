@@ -122,7 +122,11 @@ function EntryRow({ entry, today, store }: { entry: DayEntry; today: ISODate; st
             }}
             label={`New date for ${kindLabel(entry.kind).toLowerCase()}`}
           />
-          {editError !== undefined && <Note tone="menstrual">{editError}</Note>}
+          {editError !== undefined && (
+            <Note tone="menstrual" alert>
+              {editError}
+            </Note>
+          )}
           <div className="flex gap-2">
             <Button
               variant="primary"
@@ -288,7 +292,11 @@ export function LogScreen() {
         </div>
       </Card>
 
-      {store.actionError !== undefined && <Note tone="menstrual">{store.actionError}</Note>}
+      {store.actionError !== undefined && (
+        <Note tone="menstrual" alert>
+          {store.actionError}
+        </Note>
+      )}
 
       <UncountedNotices analysis={analysis} today={today} />
 
