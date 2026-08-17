@@ -68,43 +68,11 @@ function collectStarts(entries: readonly DayEntry[], invalid: InvalidLogEntry[])
   return [...seen].sort(compareDates);
 }
 
-/** A logged end date, with the cycle the order of the log says she wrote it under. */
-interface LoggedEnd {
-  date: ISODate;
-  /**
-   * The start of the cycle that was in progress when this end was written: the
-   * most recent period start entry before it in the log, when that start is one
-   * the derivation accepted and is not itself dated after the end.
-   *
-   * Absent when the log order names no such start, which is an end written
-   * before any start entry, one written under a start the derivation left out,
-   * or one dated before the start it follows, which is a bleed logged after the
-   * fact. Those are placed by date instead.
-   */
-  loggedUnder?: ISODate;
-}
-
-/**
- * The logged end dates, sorted and de-duplicated, unreadable ones reported, each
- * carrying the start it was written under.
- */
-function collectEnds(
-  entries: readonly DayEntry[],
-  accepted: ReadonlySet<ISODate>,
-  invalid: InvalidLogEntry[]
-): LoggedEnd[] {
+/** The logged end dates, sorted and de-duplicated, unreadable ones reported. */
+function collectEnds(entries: readonly DayEntry[], invalid: InvalidLogEntry[]): ISODate[] {
   const seen = new Set<ISODate>();
   const seenInvalid = new Set<unknown>();
-  const ends: LoggedEnd[] = [];
-  let openStart: ISODate | undefined;
   for (const entry of entries) {
-    if (entry.kind === 'period-start') {
-      // A start the derivation left out closes the previous one rather than
-      // leaving it open, so an end written after it is not attributed to a cycle
-      // that had already been superseded by the time she typed it.
-      openStart = isValidISODate(entry.date) && accepted.has(entry.date) ? entry.date : undefined;
-      continue;
-    }
     if (entry.kind !== 'period-end') continue;
     if (!isValidISODate(entry.date)) {
       if (seenInvalid.has(entry.date)) continue;
@@ -112,13 +80,9 @@ function collectEnds(
       invalid.push(invalidEntry('period-end', entry.date));
       continue;
     }
-    if (seen.has(entry.date)) continue;
     seen.add(entry.date);
-    const loggedUnder =
-      openStart !== undefined && compareDates(openStart, entry.date) <= 0 ? openStart : undefined;
-    ends.push({ date: entry.date, ...(loggedUnder === undefined ? {} : { loggedUnder }) });
   }
-  return ends.sort((left, right) => compareDates(left.date, right.date));
+  return [...seen].sort(compareDates);
 }
 
 function clinicalFlagsFor(lengthDays: number): ClinicalFlag[] {
@@ -185,48 +149,42 @@ export interface DerivationResult {
  * and for the same reason. This is health data she typed in and the app does not
  * get to overwrite it.
  *
- * An end date belongs to the cycle she wrote it under, and the order of the log
- * is what says which that is. The entries are a list she appends to, so the
- * period start entry before an end entry is the cycle that was in progress when
- * she typed it. That is read first, and the date decides only for the ends the
- * order cannot place: one written before any start entry, one written under a
- * start this derivation left out, or one dated before the start it follows,
- * which is a bleed logged after the fact.
+ * An end date is matched to a cycle by date alone, and the position of an entry
+ * in `log.entries` means nothing. `CycleLog.entries` is documented as a flat
+ * list of dated entries with no ordering invariant, and the analysis is asserted
+ * to give the same answer whatever order they arrive in, so a storage layer that
+ * sorts on load, an import that merges two files, or a UI that rewrites an entry
+ * in place cannot change what a log means. The three rules are:
  *
- * Reading the order first is what keeps an entry on the cycle she logged it on.
- * Matched by date alone, an end dated past every start could only ever land on
- * the last cycle, because the last cycle is the only one with no next start to
- * stop the search, so a mistyped year moved onto each new last cycle as she
- * logged starts. The cycle carrying it has no readable bleed end and so gets no
- * fertility estimate, and migration spread that from the one cycle it was
- * written on to every cycle after it, for as long as the typed date stayed
- * ahead. Placed by order it stays where she wrote it, so the next start she logs
- * opens a cycle the engine can read again. For a log written and read in order
- * the two rules agree; the order is the only thing that can tell them apart when
- * they do not.
+ *  - an end belongs to the latest start at or before it,
+ *  - it must fall strictly before the next start, and
+ *  - for the last cycle it must additionally not be dated after today, and must
+ *    fall within {@link MAX_FITTABLE_PERIOD_LENGTH_DAYS} of the start, to be
+ *    attributed at all.
  *
- * Excluding a start excludes what belongs to it. An end date sits between the
- * start it belongs to and the next one, so leaving a start out without moving
- * the boundary it provided hands its end to the last cycle that was kept, which
- * is how a mistyped year once produced a 397 day period. An excluded start
- * closes the cycle before it for the order rule, and `firstFutureStart` is the
- * same boundary for the date rule, kept after the start itself is dropped.
+ * The third rule is what bounds the only cycle that has no next start to stop
+ * the search. Without it an end dated past every start could land only there,
+ * so a mistyped year moved onto each new last cycle as she logged starts: the
+ * cycle carrying it has no readable bleed end and so gets no fertility estimate,
+ * and the migration spread that from the one cycle she wrote it on to every
+ * cycle after it. Bounding the last cycle keeps an unreadable entry where it was
+ * written, and the next start she logs opens a cycle the engine can read again.
  *
- * That is a rule about excluded starts rather than about future-dated ones, so
- * the other exclusion gets it too. A start left out for not being a calendar
- * date leaves the same hole and no date to fill it with. For the order rule that
- * costs nothing, since where the entry sits in the log is exactly what is still
- * readable about it. For the date rule nothing says whether it sat before or
- * after the ends that follow the last accepted start, so the boundary is
- * preserved as unknown rather than dropped and the last accepted cycle takes no
- * end that way. That is the fallback alone: an end the order has already placed
- * on a cycle is hers on that cycle, and an unreadable row elsewhere in the log
- * does not take it off her. Discarding an end she logged is not the safe
- * direction, because the cycle is then laid out around a shorter bleed than the
- * one she recorded and the fertility estimate is published across the
- * difference. The end itself is untouched in every case, on the same terms as
- * every other entry the derivation cannot place: still in the log, never
- * rewritten.
+ * Excluding a start excludes what belongs to it. An end sits between the start
+ * it belongs to and the next one, so leaving a start out without keeping the
+ * boundary it provided hands its end to the last cycle that was kept, which is
+ * how a mistyped year once produced a 397 day period. `firstFutureStart` keeps
+ * that boundary after the start itself is dropped. A start left out for not
+ * being a calendar date leaves the same hole with no date to fill it, and the
+ * bound on the last cycle is what covers it: an end far enough past the last
+ * accepted start to have belonged to the unreadable one is outside the plausible
+ * bleed length and is not attributed.
+ *
+ * A cycle that ends up with no end date is not a cycle with a short bleed. It is
+ * one the engine cannot read, and the phase layer has to treat it that way; see
+ * the deferred note in the pull request for the case that is still open. The
+ * entry itself is untouched in every case, on the same terms as every other
+ * entry the derivation cannot place: still in the log, never rewritten.
  */
 export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
   const invalidEntries: InvalidLogEntry[] = [];
@@ -249,7 +207,7 @@ export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
   const firstFutureStart = futureDatedStarts[0]?.date;
   // The same boundary from a start that has no readable date to provide one.
   const hasUnplaceableStart = invalidEntries.some((entry) => entry.kind === 'period-start');
-  const ends = collectEnds(log.entries, new Set(starts), invalidEntries);
+  const ends = collectEnds(log.entries, invalidEntries);
 
   const cycles: DerivedCycle[] = [];
   const missedLogSuspicions: MissedLogSuspicion[] = [];
@@ -259,27 +217,39 @@ export function deriveCycles(log: CycleLog, today: ISODate): DerivationResult {
     const startDate = starts[index] as ISODate;
     const nextStartDate = starts[index + 1];
 
-    // The logged end that belongs to this cycle. First the one she wrote under
-    // this start, which the log order names outright and no later cycle can take
-    // off it. Failing that, the earliest end the order could not place that
-    // falls on or after this start and strictly before the next one she logged,
-    // whether or not that next start was counted as a cycle. Anything else is a
-    // stray entry, or belongs to a start this derivation left out. With an
-    // excluded start that has no readable date there is no telling which of the
-    // two an unplaced end after this start is, so this cycle takes none that
-    // way. `ends` is sorted, so both searches take the earliest match.
+    // The logged end that belongs to this cycle: the earliest one falling on or
+    // after this start and strictly before the next start she logged, whether or
+    // not that next start was counted as a cycle. Anything else is a stray entry
+    // or belongs to a start this derivation left out. `ends` is sorted, so the
+    // search takes the earliest match.
+    //
+    // The last cycle has no next start to stop the search, so it takes an end
+    // only if that end names a day she could already have observed. Without that
+    // bound an end dated past every start could land only here, and would land
+    // here again on each new last cycle as she logged starts, so one mistyped
+    // year withheld the fertility estimate from every cycle after it rather than
+    // from the one she wrote it on.
+    //
+    // An unreadable start leaves the same hole with no date to fill it, and
+    // nothing says whether it sat before or after the ends that follow the last
+    // accepted start. There the plausible bleed length is the only thing left to
+    // tell the two apart: an end a few days after this start is the bleed of
+    // this cycle, and one a month after it is far more likely to belong to the
+    // start that could not be read, so it is left off rather than invented onto
+    // this one. That bound applies only to that ambiguity. Everywhere else an
+    // implausibly long end is hers, shown at the length she typed, because
+    // discarding it lays the cycle out around a shorter bleed than she recorded
+    // and publishes the fertility estimate across the difference.
     const endBoundary = nextStartDate ?? firstFutureStart;
-    const boundaryIsUnknown = nextStartDate === undefined && hasUnplaceableStart;
-    const endDate =
-      ends.find((end) => end.loggedUnder === startDate)?.date ??
-      (boundaryIsUnknown
-        ? undefined
-        : ends.find(
-            (end) =>
-              end.loggedUnder === undefined &&
-              compareDates(end.date, startDate) >= 0 &&
-              (endBoundary === undefined || compareDates(end.date, endBoundary) < 0)
-          )?.date);
+    const isOpenCycle = nextStartDate === undefined;
+    const boundaryIsUnknown = isOpenCycle && hasUnplaceableStart;
+    const endDate = ends.find(
+      (end) =>
+        compareDates(end, startDate) >= 0 &&
+        (endBoundary === undefined || compareDates(end, endBoundary) < 0) &&
+        (!isOpenCycle || compareDates(end, today) <= 0) &&
+        (!boundaryIsUnknown || diffDays(startDate, end) + 1 <= MAX_FITTABLE_PERIOD_LENGTH_DAYS)
+    );
     const periodLengthDays = endDate === undefined ? undefined : diffDays(startDate, endDate) + 1;
 
     if (nextStartDate === undefined) {

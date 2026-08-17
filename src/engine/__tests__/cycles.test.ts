@@ -286,11 +286,13 @@ describe('logged end dates', () => {
     expect(observedPeriodLengths(cycles, AFTER_EVERY_START)).toEqual([5]);
   });
 
-  it('keeps an end dated after today in her history but out of the fit', () => {
+  it('waits for an end dated after today rather than counting days that have not happened', () => {
     // She starts on the 5th, means to log the end as the 5th of the next month
     // and types the 15th of this one, two days out. Three days of bleeding
-    // counted as eleven is not an observation, and one of them biases the
-    // learned length upward for every cycle after it.
+    // counted as eleven is not an observation. The open cycle is the only one
+    // with no next start to bound the search, so an end it cannot have observed
+    // yet is left unattributed until the day it names arrives; taking it would
+    // let one mistyped date move onto each new last cycle as she logs starts.
     const log: CycleLog = {
       version: 1,
       entries: [
@@ -298,12 +300,16 @@ describe('logged end dates', () => {
         { date: '2024-03-15', kind: 'period-end' },
       ],
     };
-    const { cycles } = deriveCycles(log, '2024-03-07');
-    expect(cycles[0]?.endDate).toBe('2024-03-15');
-    expect(cycles[0]?.periodLengthDays).toBe(11);
-    expect(observedPeriodLengths(cycles, '2024-03-07')).toEqual([]);
-    // And it counts from the day it names, exactly as a future-dated start does.
-    expect(observedPeriodLengths(cycles, '2024-03-15')).toEqual([11]);
+    const ahead = deriveCycles(log, '2024-03-07').cycles;
+    expect(ahead[0]?.endDate).toBeUndefined();
+    expect(ahead[0]?.periodLengthDays).toBeUndefined();
+    expect(observedPeriodLengths(ahead, '2024-03-07')).toEqual([]);
+    // The entry is untouched, and counts from the day it names.
+    expect(log.entries).toHaveLength(2);
+    const arrived = deriveCycles(log, '2024-03-15').cycles;
+    expect(arrived[0]?.endDate).toBe('2024-03-15');
+    expect(arrived[0]?.periodLengthDays).toBe(11);
+    expect(observedPeriodLengths(arrived, '2024-03-15')).toEqual([11]);
   });
 
   it('leaves the learned length at the prior rather than biased by that entry', () => {
@@ -345,44 +351,27 @@ describe('logged end dates', () => {
 });
 
 describe('an end date mistyped into next year', () => {
-  // She means 2024-01-31 and types 2024-12-31. The engine cannot read when that
-  // bleed ended, so it withholds the fertility estimate for the cycle carrying
-  // the entry. That is affordable only because it is one cycle: the cost of a
-  // single typo must not be an estimate withheld for as long as the typed date
-  // stays ahead.
+  // She means 2024-01-31 and types 2024-12-31. The open cycle is the only one
+  // with no next start to stop the end search, so before this rule that entry
+  // landed there, and landed there again on each new last cycle as she logged
+  // starts: one typo withheld the fertility estimate from every cycle after it
+  // rather than from the one she wrote it on. An end naming a day she cannot
+  // have observed is simply not attributed, so it has nowhere to migrate to.
   const typed: DayEntry[] = [
     { date: '2024-01-01', kind: 'period-start' },
     { date: '2024-01-29', kind: 'period-start' },
     { date: '2024-12-31', kind: 'period-end' },
   ];
 
-  it('withholds the estimate for the cycle she wrote it under', () => {
+  it('attributes it to no cycle while the day it names is still ahead', () => {
     const analysis = analyze({ version: 1, entries: typed }, { today: '2024-02-10' });
-    expect(analysis.cycles[1]?.endDate).toBe('2024-12-31');
-    expect(analysis.phases.fertileWindow).toBeUndefined();
-    expect(analysis.phases.estimatedOvulationDate).toBeUndefined();
+    expect(analysis.cycles.map((cycle) => cycle.endDate)).toEqual([undefined, undefined]);
+    // Untouched: still in the log, and reported nowhere as an error.
+    expect(analysis.invalidEntries).toEqual([]);
   });
 
-  it('gives it back on the next start she logs', () => {
-    // The containment claim, checked rather than asserted in prose. The entry
-    // stays on the cycle she wrote it under instead of moving onto each new last
-    // cycle, so the cycle she has just opened is one the engine can read.
-    const withNextStart: CycleLog = {
-      version: 1,
-      entries: [...typed, { date: '2024-02-26', kind: 'period-start' }],
-    };
-    const analysis = analyze(withNextStart, { today: '2024-02-26' });
-    expect(analysis.cycles).toHaveLength(3);
-    expect(analysis.cycles[1]?.endDate).toBe('2024-12-31');
-    expect(analysis.cycles[2]?.endDate).toBeUndefined();
-    expect(analysis.cycles[2]?.periodLengthDays).toBeUndefined();
-    expect(analysis.phases.fertileWindow).toBeDefined();
-    expect(analysis.phases.estimatedOvulationDate).toBeDefined();
-  });
-
-  it('keeps giving it back as she logs more, rather than once', () => {
-    // The entry never becomes the last cycle's again, on any number of starts
-    // after it, for as long as the date she typed is still ahead.
+  it('cannot move onto the cycles she opens after it', () => {
+    // The containment claim, checked rather than asserted in prose.
     const later: CycleLog = {
       version: 1,
       entries: [
@@ -392,13 +381,20 @@ describe('an end date mistyped into next year', () => {
       ],
     };
     const analysis = analyze(later, { today: '2024-03-25' });
+    expect(analysis.cycles).toHaveLength(4);
     expect(analysis.cycles.map((cycle) => cycle.endDate)).toEqual([
       undefined,
-      '2024-12-31',
+      undefined,
       undefined,
       undefined,
     ]);
-    expect(analysis.phases.fertileWindow).toBeDefined();
+  });
+
+  it('takes it on the cycle it belongs to once that day has arrived', () => {
+    // It is her data, not a permanent exclusion. Read on a day past the one she
+    // typed, the end is the bleed of the cycle it falls in.
+    const analysis = analyze({ version: 1, entries: typed }, { today: '2025-01-15' });
+    expect(analysis.cycles[1]?.endDate).toBe('2024-12-31');
   });
 });
 
