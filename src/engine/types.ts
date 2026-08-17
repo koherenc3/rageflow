@@ -1,0 +1,544 @@
+import type { ISODate } from './date';
+
+/**
+ * The data model.
+ *
+ * Two rules shape it.
+ *
+ * 1. The log is a flat list of dated entries, each tagged with a `kind`. Adding
+ *    symptom or mood logging later means adding a new `kind`, not changing the
+ *    shape of anything already written. Nothing in v1 is implemented beyond
+ *    period start and period end.
+ * 2. A cycle is derived, never stored. Cycles are the interval between
+ *    consecutive starts, so storing them would let them drift out of sync with
+ *    the only thing she actually typed. Correcting a mistyped start date has to
+ *    silently correct every cycle around it.
+ */
+
+/** Kinds of day entry the engine understands today. */
+export type DayEntryKind = 'period-start' | 'period-end';
+
+/**
+ * One logged fact about one calendar day.
+ *
+ * `meta` is an open bag for forward compatibility. Readers must preserve keys
+ * they do not recognise so an older build cannot destroy data written by a
+ * newer one.
+ */
+export interface DayEntry {
+  date: ISODate;
+  kind: DayEntryKind;
+  meta?: Readonly<Record<string, unknown>>;
+}
+
+/** The entire persisted document. Storage lands in task 2. */
+export interface CycleLog {
+  /** Bumped only for changes that older readers cannot handle. */
+  version: 1;
+  entries: readonly DayEntry[];
+}
+
+/** Reasons a cycle is worth mentioning to a clinician. Never a diagnosis. */
+export type ClinicalFlag = 'unusually-short' | 'unusually-long';
+
+/**
+ * One cycle, derived from consecutive period starts.
+ *
+ * The final cycle in a log is in progress: it has a start and no next start, so
+ * no length.
+ */
+export interface DerivedCycle {
+  /** Zero-based position in the log, oldest first. */
+  index: number;
+  startDate: ISODate;
+  /** Start of the following cycle. Absent for the in-progress cycle. */
+  nextStartDate?: ISODate;
+  /** Days from this start to the next. Absent for the in-progress cycle. */
+  lengthDays?: number;
+  /**
+   * Logged last day of bleeding, when she recorded one that the derivation
+   * placed on this cycle. Which end lands on which cycle, and when one lands on
+   * none, is stated in `deriveCycles`; this defers to it rather than restating
+   * it, because a second copy is a second thing that can go stale.
+   */
+  endDate?: ISODate;
+  /**
+   * Inclusive bleed length in days, present exactly when `endDate` is. Reported
+   * exactly as logged; an implausibly long one is kept here and left out of the
+   * fit by `observedPeriodLengths`.
+   */
+  periodLengthDays?: number;
+  /** True when this gap looks like two cycles with a missed start log. */
+  suspectedMissedLog: boolean;
+  /** Populated only for cycles with a known length that is not a suspected skip. */
+  clinicalFlags: readonly ClinicalFlag[];
+}
+
+/** Posterior of the Normal-Inverse-Gamma model over cycle length. */
+export interface CycleLengthPosterior {
+  /** Observations that made it into the fit (suspected skips excluded). */
+  observationCount: number;
+  /** Sum of recency weights. The model's effective sample size. */
+  weightSum: number;
+  /**
+   * Recency half life this fit used, in cycles.
+   *
+   * Carried on the posterior because `weightSum` is only interpretable against
+   * it: the attainable maximum is a function of the half life, so anything
+   * scaling against that maximum has to read the half life from the same fit
+   * rather than assume the default.
+   */
+  halfLife: number;
+  mu: number;
+  kappa: number;
+  alpha: number;
+  beta: number;
+  /** Student-t posterior predictive over the next cycle length. */
+  predictive: StudentTPredictive;
+}
+
+export interface StudentTPredictive {
+  degreesOfFreedom: number;
+  location: number;
+  scale: number;
+  /** Standard deviation of the predictive. `Infinity` at df <= 2. */
+  standardDeviation: number;
+}
+
+/** How much the engine claims to know. Driven by data volume, not by wording. */
+export type ConfidenceTier = 'none' | 'low' | 'moderate' | 'high';
+
+/** A closed date range, both ends inclusive. */
+export interface DateRange {
+  start: ISODate;
+  end: ISODate;
+}
+
+export interface CredibleInterval {
+  /** Nominal coverage, e.g. 0.8. */
+  level: number;
+  range: DateRange;
+  /** Inclusive width in days. */
+  widthDays: number;
+}
+
+/**
+ * The dates the model computed for the next start, before anything is withheld.
+ *
+ * Every field is populated, always. This is what calibration grades and what the
+ * phase model is anchored to, both of which need the raw numbers whatever state
+ * the log is in. What a consumer is allowed to show is
+ * {@link NextStartPrediction}.
+ */
+export interface NextStartEstimate {
+  /** Most recent logged start the estimate is anchored to. Absent with an empty log. */
+  lastStartDate?: ISODate;
+  /** Point estimate. Always presented alongside the intervals, never alone. */
+  pointDate: ISODate;
+  /** Expected cycle length in days, unrounded. */
+  expectedCycleLengthDays: number;
+  interval50: CredibleInterval;
+  interval80: CredibleInterval;
+  /**
+   * Last day this estimate still describes a current cycle. Past it the log has
+   * gone quiet for longer than the model can account for. See
+   * `STALE_PREDICTIVE_QUANTILE` and `STALE_MIN_ELAPSED_CYCLES`.
+   */
+  validThrough: ISODate;
+  /** Multiplier applied to the raw intervals by calibration. 1 when untouched. */
+  appliedWidenFactor: number;
+  confidence: number;
+  confidenceTier: ConfidenceTier;
+  /** False until at least one of her own cycles is in the fit. */
+  personalized: boolean;
+}
+
+interface NextStartPredictionCommon {
+  lastStartDate?: ISODate;
+  /** Expected cycle length in days, unrounded. */
+  expectedCycleLengthDays: number;
+  appliedWidenFactor: number;
+  confidence: number;
+  confidenceTier: ConfidenceTier;
+  personalized: boolean;
+  /**
+   * Sentence describing how much history this prediction rests on, already
+   * included at the end of `summary`. Carried as its own field so a consumer, and
+   * `CycleAnalysis`, can read it off the prediction instead of deriving it a
+   * second time from the same inputs and risking two different sentences.
+   */
+  coldStartMessage: string;
+  /** Plain sentence the UI can show verbatim. */
+  summary: string;
+}
+
+/**
+ * A prediction that still describes a period that has not happened yet.
+ *
+ * "Not yet" is measured by its own 80% interval rather than by the point date.
+ * A period arriving a day or two after the most likely date is what the interval
+ * is for, and going quiet the moment the point date passes would throw away the
+ * range the engine went to the trouble of computing.
+ */
+export interface CurrentNextStartPrediction extends NextStartPredictionCommon {
+  isLate: false;
+  isStale: false;
+  pointDate: ISODate;
+  interval50: CredibleInterval;
+  interval80: CredibleInterval;
+}
+
+/**
+ * A prediction the calendar has outlived: today is past the far end of its own
+ * 80% interval and nothing has been logged since.
+ *
+ * The date the engine named survives as `expectedDate`, which is named for the
+ * tense it is now in, and both intervals are dropped. Every day in them is in
+ * the past, so a range offered as when the period is due would be a plain false
+ * statement, while the date that did not happen is still worth reporting.
+ */
+export interface LateNextStartPrediction extends NextStartPredictionCommon {
+  isLate: true;
+  isStale: false;
+  /** A late prediction is always anchored to a real logged start. */
+  lastStartDate: ISODate;
+  /** The date the period was expected. Always in the past here. */
+  expectedDate: ISODate;
+  /** Days from `expectedDate` to today. Always at least one. */
+  daysLate: number;
+}
+
+/**
+ * A prediction whose period did not arrive, or arrived and was not logged, for
+ * longer than the model can account for.
+ *
+ * The dates are gone rather than flagged. Every one of them is in the past, so
+ * `pointDate` bound to "next period" would render a date from months ago, and a
+ * boolean beside it only prevents that for a consumer who remembers to read the
+ * boolean. Discriminating the union on `isStale` and `isLate` means the compiler
+ * stops anyone who does not.
+ */
+export interface StaleNextStartPrediction extends NextStartPredictionCommon {
+  isLate: false;
+  isStale: true;
+  /** The stale prediction is always anchored to a real logged start. */
+  lastStartDate: ISODate;
+}
+
+/**
+ * The prediction for the next period start.
+ *
+ * `isLate` is on every variant rather than only on the one it is true for, so a
+ * consumer reads the state of the log off the prediction itself instead of
+ * pairing it with `PhaseModel.isLate` by convention. The two are drawn at
+ * different points on purpose and cannot contradict each other: the phase model
+ * is late from the predicted day, the prediction only once the whole 80% range
+ * has run out, so a late prediction always sits inside a late phase model.
+ */
+export type NextStartPrediction =
+  CurrentNextStartPrediction | LateNextStartPrediction | StaleNextStartPrediction;
+
+/** A learned scalar with a Gaussian prior. */
+export interface LearnedLength {
+  meanDays: number;
+  sdDays: number;
+  /** Observations folded in. Zero means this is still the untouched prior. */
+  observationCount: number;
+  /** True while no observation has moved it off the prior. */
+  isPrior: boolean;
+}
+
+/**
+ * Where a day sits in the cycle.
+ *
+ * The first five are phases of a cycle the engine can place the day in. The last
+ * three are not, and each is a different thing the engine says instead.
+ *
+ * `predicted-menstrual` is a bleed day that has not happened, whether it is a
+ * day of the bleed expected next or a day of the bleed in progress that her
+ * entry or the learned length reaches past today. `menstrual` is a day of a
+ * bleed she logged the start of that has arrived. The difference is the
+ * difference between a fact and a prediction, and it is a separate member rather
+ * than a flag beside `menstrual` for the same reason the other two are members:
+ * a flag can be ignored, and a day the engine merely expects must never render
+ * as a period she recorded. Which of the two bleeds a `predicted-menstrual` day
+ * belongs to is {@link PredictedBleedBasis}, a discriminator on the estimate
+ * rather than a ninth member here, because the two mean the same thing about the
+ * day and differ only in what the claim rests on.
+ *
+ * `late` means the predicted start has arrived or passed and no new start has
+ * been logged. That is the whole claim: the engine knows the date it predicted
+ * and knows nothing came in, and it says exactly that.
+ *
+ * `stale` means the silence has run past everything the model can account for,
+ * so there is no current cycle to place the day in at all.
+ *
+ * All three are in this union rather than sitting beside it as flags, so an
+ * exhaustive switch over the phases stops compiling until a consumer handles
+ * them and none can be rendered as an ordinary phase by omission.
+ */
+export type CyclePhase =
+  | 'menstrual'
+  | 'predicted-menstrual'
+  | 'follicular'
+  | 'fertile'
+  | 'luteal'
+  | 'premenstrual'
+  | 'late'
+  | 'stale';
+
+/**
+ * What a `predicted-menstrual` day rests on, for a consumer that renders the two
+ * differently.
+ *
+ * `continues-logged-bleed` is a day of the bleed of the cycle she is in, which
+ * her logged end date or the learned length carries past today. The cycle it
+ * belongs to began on a start she typed in, so a calendar can style it as her
+ * own entry running on rather than as a guess about a future cycle.
+ * `expected-next-bleed` is a day of the bleed the engine expects next, which
+ * nothing has been logged for at all.
+ *
+ * Both are estimates about a day that has not happened, which is why they share
+ * a phase, and both say so in their own words. This field exists so that telling
+ * them apart does not mean matching on those words: a UI regex over a sentence
+ * breaks silently the first time the wording changes.
+ */
+export type PredictedBleedBasis = 'continues-logged-bleed' | 'expected-next-bleed';
+
+export interface PhaseEstimate {
+  date: ISODate;
+  phase: CyclePhase;
+  /**
+   * 1 on the first day of bleeding. While `predicted-menstrual` it counts from
+   * whichever start the day is indexed to: the logged one when the day continues
+   * the bleed of the cycle she is in, and the predicted one otherwise, because
+   * that day is day 1 of the cycle the engine expects to begin there.
+   * `predictedBleedBasis` says which, so the number is never ambiguous. Absent
+   * when there is no logged start yet, and absent while `stale`, where the only
+   * number available is days since a start that is no longer the start of
+   * anything the engine can describe.
+   */
+  dayOfCycle?: number;
+  /** Present exactly when `phase` is `predicted-menstrual`. */
+  predictedBleedBasis?: PredictedBleedBasis;
+  /**
+   * Days from the predicted start to today, 0 on the predicted day itself.
+   * Present only when `phase` is `late`. It counts to today and not to `date`
+   * even when the two differ, because being late is a state of the log rather
+   * than a property of the day being asked about. `summary` is the other way
+   * round: it describes `date`, so its day counts are measured from `date` and
+   * can differ from this field on any day that is not today.
+   */
+  daysLate?: number;
+  confidence: number;
+  confidenceTier: ConfidenceTier;
+  /** Always true. Present so the UI cannot render fertility output without it. */
+  fertilityIsEstimateNotContraception: true;
+  summary: string;
+}
+
+/**
+ * The windows of the current cycle: the one that began at the last logged start
+ * and has not been closed by another.
+ *
+ * They never overlap. The bleed is indexed forward from the logged start and the
+ * fertile window backward from the predicted end, so on a short cycle with a long
+ * period the raw ranges collide; `windowsFor` cuts them apart, and drops whatever
+ * the state of the log has contradicted, before either this model or
+ * `phaseForDate` sees them.
+ *
+ * This is where the agreement between the two is stated; the doc comments and
+ * `docs/DECISIONS.md` defer here rather than restating it. For every day of the
+ * current cycle these are the only windows there are, so painting these ranges
+ * and asking `phaseForDate` day by day give the same answer, in every state of
+ * the log. Whenever `fertileWindow` is absent no day of this cycle comes back
+ * `fertile`, and the same holds for `premenstrualWindow`.
+ *
+ * The current cycle is the domain of that invariant because it is the only cycle
+ * this model describes. A completed cycle is bounded by a next start that really
+ * happened, so `phaseForDate` classifies its days against that cycle's own
+ * windows, which are anchored to fact rather than to a prediction and are not
+ * published here: a day of a completed cycle can come back `fertile` while this
+ * model, late today, holds no fertile window at all. Naming that domain is what
+ * makes the guarantee exact, not what softens it.
+ *
+ * `isLate` and `isStale` are two tiers of one state and never both true. Late
+ * runs from the predicted start to the staleness bound, stale takes over past
+ * it, and the predicted start has passed with nothing logged in either. They are
+ * spelled out here rather than left to be inferred field by field, exactly as
+ * {@link NextStartPrediction} spells out its own three tiers, because "still
+ * late" and "so late the model has given up" read as one thing to a consumer
+ * asking whether to show anything overdue.
+ */
+export interface PhaseModel {
+  lutealLength: LearnedLength;
+  periodLength: LearnedLength;
+  /**
+   * Absent until there is a logged start to anchor to, absent while late or
+   * stale, and absent whenever `fertileWindow` is, since an ovulation estimate
+   * with no window around it is a marker with nowhere to sit.
+   */
+  estimatedOvulationDate?: ISODate;
+  /**
+   * Absent while late or stale, absent in the rare case where the bleed of this
+   * cycle covers every day of it, and absent for a cycle whose recorded bleed
+   * runs longer than the fit will accept, where the engine cannot read when that
+   * bleed ended and so has no cycle structure to time an ovulation off.
+   * `windowsFor` lays those rules out and is the one statement of them. Whenever
+   * this is absent `phaseForDate` reports no day of this cycle as `fertile`.
+   */
+  fertileWindow?: DateRange;
+  /** Absent while late or stale, and absent if an earlier window covers it. */
+  premenstrualWindow?: DateRange;
+  /**
+   * Anchored to what she logged rather than to the prediction, so it survives
+   * both `late` and `stale`. It runs from the start she logged to the end she
+   * logged, and only to the learned period length when she recorded no end, so
+   * it describes a bleed she typed in rather than one estimated over the top of
+   * her entry. That stays true however long the silence after it runs.
+   *
+   * A logged end is taken at face value however implausible it is, so this can
+   * be far longer than any real period and can leave no room for the other
+   * windows. It is not published past today, though: neither an end dated in
+   * the future nor a learned length reaching past today is a record of days
+   * that have not happened, so this window stops at today until they arrive,
+   * and is absent in the one case where none of the bleed has happened yet.
+   *
+   * How far past today the bleed is carried at all, which of the days it stops
+   * short of are held back from the other windows, and what `phaseForDate`
+   * reports those days as are one rule, stated in `windowsFor` and in the
+   * contract on `phaseForDate`. This defers to them rather than restating it,
+   * because a second copy is a second thing that can go stale.
+   */
+  menstrualWindow?: DateRange;
+  /**
+   * True from the predicted start until the staleness bound, with nothing logged
+   * since. False once `isStale` takes over, which is the tier above rather than
+   * a return to normal: a consumer showing something overdue has to read both.
+   *
+   * The ovulation estimate and the fertile and premenstrual windows are absent
+   * in both tiers: all three are indexed backward from the end of a cycle whose
+   * end is now unknown, so they describe a cycle that is not happening as
+   * predicted.
+   */
+  isLate: boolean;
+  /** Days past the predicted start. Present only while `isLate`. */
+  daysLate?: number;
+  /**
+   * True when the log stopped too long ago for these windows to describe a
+   * current cycle, which is the tier past `isLate` and never true alongside it.
+   * Every predicted window is absent in that case, deliberately: a months old
+   * fertile window presented as the current one is wrong if she has stopped
+   * logging and harmful if the reason is a pregnancy. What is left is
+   * `menstrualWindow`, which is a logged fact rather than a prediction.
+   */
+  isStale: boolean;
+  fertilityIsEstimateNotContraception: true;
+}
+
+/** One prediction graded against what actually happened. */
+export interface CalibrationRecord {
+  /** Cycle index of the outcome being graded. */
+  cycleIndex: number;
+  predictedDate: ISODate;
+  actualDate: ISODate;
+  /** Actual minus predicted, in days. Positive means she was late. */
+  errorDays: number;
+  interval50: DateRange;
+  interval80: DateRange;
+  within50: boolean;
+  within80: boolean;
+  interval80WidthDays: number;
+}
+
+export interface CalibrationSummary {
+  records: readonly CalibrationRecord[];
+  sampleCount: number;
+  /** `NaN` with no records. */
+  meanAbsoluteErrorDays: number;
+  /** `NaN` with no records. */
+  medianAbsoluteErrorDays: number;
+  /** Observed fraction of outcomes inside each nominal interval. `NaN` with no records. */
+  coverage50: number;
+  coverage80: number;
+  /** `NaN` with no records. */
+  meanInterval80WidthDays: number;
+  /** Multiplier the next prediction's intervals get. Always >= 1. */
+  widenFactor: number;
+  /** Plain sentence describing measured accuracy so far. */
+  summary: string;
+}
+
+/** A cycle worth mentioning to a clinician, with wording that does not diagnose. */
+export interface ClinicalNote {
+  cycleIndex: number;
+  startDate: ISODate;
+  lengthDays: number;
+  flag: ClinicalFlag;
+  message: string;
+}
+
+/**
+ * A logged period start dated after today, left out of the derivation.
+ *
+ * The entry stays in the log exactly as she typed it. This is the engine saying
+ * it has not counted that start yet, so a UI can show why a date she can see in
+ * her history is not the start of anything, rather than leaving her to wonder
+ * where it went.
+ */
+export interface FutureDatedStart {
+  date: ISODate;
+  /** Plain sentence the UI can show verbatim. */
+  message: string;
+}
+
+/**
+ * A logged entry whose date is not a calendar date, left out of the derivation.
+ *
+ * One unreadable row does not make the rest of a history unreadable, so it is
+ * reported here rather than thrown, on the same terms as a future-dated start:
+ * the entry stays in the log exactly as it is, and a UI has a sentence for why
+ * a row she can see is not counted. `date` is whatever was stored, which is why
+ * it is not an `ISODate`.
+ */
+export interface InvalidLogEntry {
+  date: unknown;
+  kind: DayEntryKind;
+  /** Plain sentence the UI can show verbatim. */
+  message: string;
+}
+
+/** A gap the engine believes is two cycles with a missed start log. */
+export interface MissedLogSuspicion {
+  cycleIndex: number;
+  startDate: ISODate;
+  nextStartDate: ISODate;
+  gapDays: number;
+  /** What a normal cycle looked like at the moment this gap was judged. */
+  runningMedianDays: number;
+  question: string;
+}
+
+/** Everything the engine produces for a given log. */
+export interface CycleAnalysis {
+  today: ISODate;
+  cycles: readonly DerivedCycle[];
+  /** Cycles that made it into the fit. */
+  usedCycleCount: number;
+  posterior: CycleLengthPosterior;
+  prediction: NextStartPrediction;
+  phases: PhaseModel;
+  currentPhase?: PhaseEstimate;
+  calibration: CalibrationSummary;
+  clinicalNotes: readonly ClinicalNote[];
+  missedLogSuspicions: readonly MissedLogSuspicion[];
+  /** Logged starts dated after `today`, which no cycle here is derived from. */
+  futureDatedStarts: readonly FutureDatedStart[];
+  /** Logged entries whose date could not be read, left out of the derivation. */
+  invalidEntries: readonly InvalidLogEntry[];
+  confidence: number;
+  confidenceTier: ConfidenceTier;
+  personalized: boolean;
+  /** Sentence describing how much history the prediction rests on. */
+  coldStartMessage: string;
+}
