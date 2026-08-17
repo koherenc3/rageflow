@@ -16,17 +16,19 @@ Log the day your period starts. That is the entire input. From those dates alone
 
 ## What it does not do
 
-No symptom logging. No mood logging. No temperature. No accounts, no sharing, no analytics, no notifications shaming you into opening it. It is one button and one screen.
+No symptom logging. No mood logging. No temperature. No accounts, no sharing, no analytics, no notifications shaming you into opening it. Three screens, and one of them is a button.
 
 ## Privacy
 
-Your data lives on your device. There is no server-side database of anything you log. Backups are encrypted in the browser before they leave it, so the backup host only ever holds ciphertext.
+Your data lives on your device, in its browser storage, and nowhere else. There is no server-side database of anything you log, no account, no third-party script, and nothing is ever sent anywhere. Backup is a file you save yourself.
+
+Encrypted cloud backup is the next piece of work. Until it lands, the file is the backup, so save one.
 
 This repository is public and contains no health data of any kind. Every number in the test suite comes from a seeded synthetic generator.
 
 ## Status
 
-Task 1 of 3 is complete: the repository scaffold and the full prediction engine with its tests. There is no product UI yet. See [docs/PLAN.md](docs/PLAN.md).
+Usable. Local storage, the three screens, export and import, and the installable PWA are done and deployed. Encrypted cloud backup is the remaining piece. See [docs/PLAN.md](docs/PLAN.md).
 
 ## Stack
 
@@ -42,7 +44,10 @@ npm run dev      # http://localhost:3000
 npm run build
 npm test
 npm run lint
+npm run icons    # regenerate the app icons from scripts/generate-icons.mjs
 ```
+
+The service worker only registers in a production build, so check anything offline with `npm run build && npm start` rather than the dev server.
 
 ## Documentation
 

@@ -89,6 +89,18 @@ Asserted:
 | `analysis.test.ts`    | The public `analyze` surface, purity of the function, entry-order independence, forward compatibility with unknown entry kinds, both gates of the staleness bound, and the three tiers of the prediction either side of the 80% interval and the staleness bound                                                                                                                                                               |
 | `purity.test.ts`      | Scans `src/engine` source and fails on any non-relative import, dynamic import, browser global, or UTC date serialisation. Also that `new Date()` appears exactly once, in `todayLocal`                                                                                                                                                                                                                                        |
 
+## Outside the engine
+
+| File                         | Covers                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `storage/repository.test.ts` | The IndexedDB repository against `fake-indexeddb`: the compound key making a repeat log one fact rather than two, deletes hitting only the entry named, a mistyped date moving in one transaction and carrying `meta` with it, merge adding without touching what is there, an unrecognised entry kind being stored rather than discarded, and the sort placing an unreadable date last instead of throwing |
+| `storage/backup.test.ts`     | The file format, every way a file can be refused, and the round trip: a seeded synthetic history out through the writer, back in through the parser and the repository, asserted to produce a log the engine analyses identically. Also that importing the same file twice is a no-op, and that a row the engine itself cannot read still survives the trip                                                 |
+| `lib/display.test.ts`        | The weekday computed from the day number rather than from `Date`, the range and relative-day wording, that a phase the engine merely expects is marked as an estimate and a logged one is not, that a `NaN` has no percentage and no day count, and that `humanizeDates` respells dates in the engine's own sentences without moving a word                                                                 |
+
+`fake-indexeddb` is the real IndexedDB algorithms in memory, not a stub of the repository's own API, so the transaction and key behaviour these tests rely on is the behaviour the browser will show. It needs no DOM, so the whole suite still runs in a plain node environment.
+
+There are no component render tests. The screens are checked in a real browser at iPhone viewport sizes, in both colour schemes, against the states the engine can actually produce: empty, one start logged, a populated history, late, and stale.
+
 ## Adding a test
 
 - Seed anything random.
